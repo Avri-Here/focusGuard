@@ -4,9 +4,9 @@ This repo implements the FocusGuard plan at `.claude/plans/FocusGuard.md`. Read 
 
 ## Status (as of 2026-05-20)
 
-- Steps **1–8** of the plan's "Build sequence" are complete.
-- Steps **9–12** are open. Resume with step 9 (`FocusGuard.Watchdog` + service-side `SessionLauncher`).
-- All tests pass: `dotnet test FocusGuard.slnx` → 59 Core + 58 Service (= 117 total). Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules; everything else is pure unit tests with no elevation requirement.
+- Steps **1–9** of the plan's "Build sequence" are complete.
+- Steps **10–12** are open. Resume with step 10 (manual tamper tests).
+- All tests pass: `dotnet test FocusGuard.slnx` → 59 Core + 66 Service (= 125 total). Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules; everything else is pure unit tests with no elevation requirement.
 - Solution builds cleanly with `dotnet build FocusGuard.slnx`.
 
 ## Environment
@@ -29,10 +29,10 @@ focusGuard/
 │   ├── FocusGuard.Core/         # ✅ implemented (see "What Core has")
 │   ├── FocusGuard.Service/      # ✅ Worker + PipeServer + FirewallManager + DnsSinkhole + AdapterDnsManager + admin commands (steps 3–6)
 │   ├── FocusGuard.Tray/         # ✅ App + tray icon + Status poll + Countdown + AdminWindow + SetPassword wizard (steps 7-8)
-│   └── FocusGuard.Watchdog/     # ⬜ skeleton only — empty console
+│   └── FocusGuard.Watchdog/     # ✅ Heartbeat-pings Service + respawns Tray (step 9)
 └── tests/
     ├── FocusGuard.Core.Tests/   # ✅ 59 tests, all green
-    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke + DnsSinkhole + AdapterDnsManager + AdminCommands + PipeClientLocation tests (58 total)
+    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke + DnsSinkhole + AdapterDnsManager + AdminCommands + PipeClientLocation + SessionLauncher + WorkerWatchdog tests (66 total)
 ```
 
 There is **no** `FocusGuard.Installer` project yet. WiX MSI is step 11.
@@ -100,6 +100,12 @@ Don't smuggle business logic into the Service; keep it as a thin wrapper.
 
 15. **`SystemEvents.PowerModeChanged` for sleep/resume is NOT yet wired up.** The plan calls for it in Step 5/6 of the architecture; it's currently a known gap. Adding it lives in `Worker.cs`, not the Tray.
 
+16. **Watchdog supervision is folded into `Worker.TickOnceAsync`.** No separate timer. Each tick `SuperviseWatchdog()` checks `_watchdogPid`: if dead and we're not Disabled and `WatchdogInterval` has elapsed since the last attempt and an interactive user exists and the watchdog exe lives at `Path.Combine(AppContext.BaseDirectory, ServiceOptions.WatchdogExeName)`, it calls `ISessionLauncher.Launch` and stores the new PID. `Worker.StopAsync` does NOT kill the watchdog — it can decide to exit on its own when the pipe ping fails repeatedly (currently it just logs).
+
+17. **`SessionLauncher` uses `DllImport`, not `LibraryImport`.** A previous attempt with LibraryImport failed because LibraryImport's source generator emits unsafe code, which collides with `TreatWarningsAsErrors=true` unless `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` is set. DllImport is safe-code-only and fully supported on .NET 10. If you ever revisit this, do NOT swap to LibraryImport without setting `<AllowUnsafeBlocks>` only on that single project AND verifying the build stays clean.
+
+18. **Watchdog is a per-user/per-session console.** Single-instance via `Local\FocusGuard.Watchdog` mutex (the `Local\` prefix scopes the mutex to the session, which matches what the Service does — one watchdog per active console session). It pings `focusguard.cmd` over the named pipe every 5s with `GetStatus`, and respawns `FocusGuard.Tray.exe` from `AppContext.BaseDirectory` if no tray process is found by name. It does not kill itself if the pipe ping fails — the Service can survive transient stalls and we don't want the watchdog to flap.
+
 ## Useful commands
 
 ```powershell
@@ -121,8 +127,8 @@ dotnet restore FocusGuard.slnx
 The plan's build sequence is good as-is. Next agent should:
 
 1. Open `.claude/plans/FocusGuard.md` and tick what's done (already ticked there).
-2. Resume at **step 9**: `FocusGuard.Watchdog` (per-user console exe that pings the Service and respawns the Tray) plus the service-side `SessionLauncher` (`CreateProcessAsUser` against the active console session). The Watchdog should reuse `FocusGuard.Core.Ipc.PipeClient` for its heartbeat ping. A previous step-9 attempt left work-in-progress on disk that did not compile; it has been reverted. Start fresh.
-3. Continue through steps 10–12.
+2. Resume at **step 10**: tamper tests on a real machine — verify Service stop ACL, watchdog respawn, clock-tamper detection, and that killing the Tray triggers a respawn within ~5s.
+3. Continue through steps 11–12.
 
 ### Manual install / start (after a Release build)
 

@@ -33,6 +33,7 @@ public sealed class Worker(
     IObjectStore<FocusGuardState> stateStore,
     IAuditLog audit,
     PasswordHasher hasher,
+    ISessionLauncher sessionLauncher,
     IOptions<ServiceOptions> options,
     ILoggerFactory loggerFactory,
     ILogger<Worker> logger) : BackgroundService, ICommandHandler
@@ -46,6 +47,11 @@ public sealed class Worker(
     private BudgetClock _budgetClock = null!;
     private DateTimeOffset? _sessionStartedAt;
     private DateTimeOffset _lastPersistAt = DateTimeOffset.MinValue;
+
+    // Watchdog supervision: track the PID we last launched, and the last attempt time so we
+    // throttle relaunches to WatchdogInterval — see TickOnceAsync's tail.
+    private int? _watchdogPid;
+    private DateTimeOffset _lastWatchdogAttempt = DateTimeOffset.MinValue;
 
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -156,6 +162,7 @@ public sealed class Worker(
                 transitioned |= ApplyInput(new StateInput.BudgetExhausted(), persistImmediately: false);
 
             sinkhole.SweepExpired();
+            SuperviseWatchdog();
 
             var now = clock.UtcNow;
             if (transitioned || now - _lastPersistAt >= _options.StatePersistInterval)
@@ -166,6 +173,62 @@ public sealed class Worker(
         finally
         {
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Best-effort: if we're not Disabled, no user is logged on, or we've recently tried,
+    /// do nothing. Otherwise verify the previously-launched PID is still alive and relaunch
+    /// the watchdog into the active console session if needed.
+    /// </summary>
+    private void SuperviseWatchdog()
+    {
+        if (_stateMachine.Current == FocusState.Disabled) return;
+
+        var now = clock.UtcNow;
+        if (now - _lastWatchdogAttempt < _options.WatchdogInterval) return;
+
+        if (_watchdogPid is { } pid && IsProcessAlive(pid))
+            return;
+
+        _lastWatchdogAttempt = now;
+
+        if (!sessionLauncher.HasInteractiveUser())
+        {
+            _watchdogPid = null;
+            return;
+        }
+
+        var exePath = Path.Combine(AppContext.BaseDirectory, _options.WatchdogExeName);
+        if (!File.Exists(exePath))
+        {
+            logger.LogDebug("Watchdog exe not found at {ExePath} — skipping launch", exePath);
+            _watchdogPid = null;
+            return;
+        }
+
+        try
+        {
+            _watchdogPid = sessionLauncher.Launch(exePath);
+        }
+        catch (Exception ex)
+        {
+            // SessionLauncher is documented as never-throwing, but be defensive.
+            logger.LogWarning(ex, "Watchdog launch threw");
+            _watchdogPid = null;
+        }
+    }
+
+    private static bool IsProcessAlive(int pid)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById(pid);
+            return !p.HasExited;
+        }
+        catch
+        {
+            return false;
         }
     }
 

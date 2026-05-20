@@ -25,10 +25,11 @@ internal sealed class WorkerHarness
     public InMemoryStore<FocusGuardState> StateStore { get; }
     public RecordingAuditLog Audit { get; }
     public PasswordHasher Hasher { get; }
+    public ISessionLauncher SessionLauncher { get; }
     public ServiceOptions Options { get; }
     public Worker Worker { get; }
 
-    private WorkerHarness(FakeClock clock, RecordingFirewall fw, RecordingSinkhole sh, RecordingAdapterManager ad, InMemoryStore<FocusGuardConfig> cs, InMemoryStore<FocusGuardState> ss, RecordingAuditLog audit, PasswordHasher hasher, ServiceOptions opts, Worker w)
+    private WorkerHarness(FakeClock clock, RecordingFirewall fw, RecordingSinkhole sh, RecordingAdapterManager ad, InMemoryStore<FocusGuardConfig> cs, InMemoryStore<FocusGuardState> ss, RecordingAuditLog audit, PasswordHasher hasher, ISessionLauncher sl, ServiceOptions opts, Worker w)
     {
         Clock = clock;
         Firewall = fw;
@@ -38,6 +39,7 @@ internal sealed class WorkerHarness
         StateStore = ss;
         Audit = audit;
         Hasher = hasher;
+        SessionLauncher = sl;
         Options = opts;
         Worker = w;
     }
@@ -46,7 +48,9 @@ internal sealed class WorkerHarness
         FocusGuardConfig? seedConfig = null,
         FocusGuardState? seedState = null,
         DateTimeOffset? localNow = null,
-        string? pipeName = null)
+        string? pipeName = null,
+        ISessionLauncher? sessionLauncher = null,
+        ServiceOptions? optionsOverride = null)
     {
         var clock = new FakeClock(localNow ?? new DateTimeOffset(2026, 5, 20, 12, 0, 0, TimeSpan.FromHours(3)));
         var firewall = new RecordingFirewall();
@@ -60,11 +64,14 @@ internal sealed class WorkerHarness
         var stateStore = new InMemoryStore<FocusGuardState>();
         if (seedState is not null) stateStore.Save(seedState);
 
-        var opts = new ServiceOptions
+        var opts = optionsOverride ?? new ServiceOptions
         {
             DataDirectory = Path.Combine(Path.GetTempPath(), "FocusGuardTests-" + Guid.NewGuid().ToString("N")),
             PipeName = pipeName ?? "focusguard.test." + Guid.NewGuid().ToString("N"),
         };
+        if (optionsOverride is null && pipeName is not null) opts.PipeName = pipeName;
+
+        var launcher = sessionLauncher ?? new NoOpSessionLauncher();
 
         var worker = new Worker(
             clock: clock,
@@ -75,11 +82,12 @@ internal sealed class WorkerHarness
             stateStore: stateStore,
             audit: audit,
             hasher: hasher,
+            sessionLauncher: launcher,
             options: Microsoft.Extensions.Options.Options.Create(opts),
             loggerFactory: NullLoggerFactory.Instance,
             logger: NullLogger<Worker>.Instance);
 
-        return new WorkerHarness(clock, firewall, sinkhole, adapters, configStore, stateStore, audit, hasher, opts, worker);
+        return new WorkerHarness(clock, firewall, sinkhole, adapters, configStore, stateStore, audit, hasher, launcher, opts, worker);
     }
 
     public Task StartAsync() => Worker.StartAsync(CancellationToken.None);

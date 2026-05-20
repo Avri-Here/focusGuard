@@ -27,6 +27,15 @@ public sealed class ServiceOptions
 
     public int UpstreamDnsPort { get; set; } = 53;
 
+    /// <summary>Filename of the per-user watchdog launched by the service into the active console session.</summary>
+    public string WatchdogExeName { get; set; } = "FocusGuard.Watchdog.exe";
+
+    /// <summary>
+    /// Minimum gap between watchdog launch attempts. Prevents busy-loop relaunching when the
+    /// watchdog can't start (e.g. user not yet logged on, exe missing).
+    /// </summary>
+    public TimeSpan WatchdogInterval { get; set; } = TimeSpan.FromSeconds(10);
+
     public string ConfigPath => Path.Combine(DataDirectory, ConfigFileName);
     public string StatePath => Path.Combine(DataDirectory, StateFileName);
 }

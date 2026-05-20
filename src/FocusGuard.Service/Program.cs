@@ -52,6 +52,11 @@ builder.Services.AddSingleton<IAuditLog>(sp =>
     return new FileAuditLog(opts.DataDirectory, sp.GetRequiredService<IClock>());
 });
 
+if (OperatingSystem.IsWindows())
+    builder.Services.AddSingleton<ISessionLauncher, SessionLauncher>();
+else
+    builder.Services.AddSingleton<ISessionLauncher, NoOpSessionLauncher>();
+
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();
