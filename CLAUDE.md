@@ -4,9 +4,9 @@ This repo implements the FocusGuard plan at `.claude/plans/FocusGuard.md`. Read 
 
 ## Status (as of 2026-05-20)
 
-- Steps **1–2** of the plan's "Build sequence" are complete.
-- Steps **3–12** are open. Resume with step 3.
-- All 49 unit tests pass (`dotnet test tests/FocusGuard.Core.Tests/FocusGuard.Core.Tests.csproj`).
+- Steps **1–3** of the plan's "Build sequence" are complete.
+- Steps **4–12** are open. Resume with step 4 (real `FirewallManager`).
+- Core unit tests + Service tests all pass (`dotnet test tests/FocusGuard.Core.Tests/...` and `tests/FocusGuard.Service.Tests/...`).
 - Solution builds cleanly with `dotnet build FocusGuard.slnx`.
 
 ## Environment
@@ -27,12 +27,12 @@ focusGuard/
 ├── CLAUDE.md                    # this file
 ├── src/
 │   ├── FocusGuard.Core/         # ✅ implemented (see "What Core has")
-│   ├── FocusGuard.Service/      # ⬜ skeleton only — Worker template
+│   ├── FocusGuard.Service/      # ✅ skeleton: Worker + PipeServer + NoOpFirewall (step 3)
 │   ├── FocusGuard.Tray/         # ⬜ skeleton only — empty WPF
 │   └── FocusGuard.Watchdog/     # ⬜ skeleton only — empty console
 └── tests/
     ├── FocusGuard.Core.Tests/   # ✅ 49 tests, all green
-    └── FocusGuard.Service.Tests/ # ⬜ empty
+    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer round-trip tests
 ```
 
 There is **no** `FocusGuard.Installer` project yet. WiX MSI is step 11.
@@ -102,9 +102,28 @@ dotnet restore FocusGuard.slnx
 The plan's build sequence is good as-is. Next agent should:
 
 1. Open `.claude/plans/FocusGuard.md` and tick what's done (already ticked there).
-2. Resume at **step 3**: implement `FocusGuard.Service/Program.cs` as a Worker Service that hosts the IPC pipe server, the BudgetClock tick loop, and a no-op `IFirewallManager` placeholder. Get manual install/start working with `sc.exe`.
-3. Then **step 4**: implement `FirewallManager.cs` against the Windows Firewall (use `WindowsFirewallHelper` NuGet — see caveat #1).
-4. Continue through steps 5–12.
+2. Resume at **step 4**: implement `FirewallManager.cs` against the Windows Firewall (use `WindowsFirewallHelper` NuGet — see caveat #1) and replace the `NoOpFirewallManager` registration in `Program.cs`.
+3. Continue through steps 5–12.
+
+### Manual install / start (after a Release build)
+
+```powershell
+# Build self-contained or framework-dependent — either is fine for local testing.
+dotnet publish src/FocusGuard.Service/FocusGuard.Service.csproj -c Release -r win-x64 --self-contained false -o C:\ProgramData\FocusGuard\bin
+
+# Register with the SCM as a SYSTEM service.
+sc.exe create FocusGuard binPath= "C:\ProgramData\FocusGuard\bin\FocusGuard.Service.exe" start= auto obj= LocalSystem DisplayName= "FocusGuard"
+sc.exe description FocusGuard "FocusGuard internet self-block service"
+sc.exe failure FocusGuard reset= 0 actions= restart/5000/restart/5000/restart/5000
+sc.exe start FocusGuard
+
+# Smoke-test the IPC pipe (PowerShell):
+$p = New-Object System.IO.Pipes.NamedPipeClientStream('.','focusguard.cmd','InOut')
+$p.Connect(2000)
+# (use FocusGuard.Service.Ipc.PipeClient from a tiny test exe for full round-trip)
+```
+
+The service's data directory is `C:\ProgramData\FocusGuard\` — the host creates it on first launch. EventLog source `FocusGuard` receives lifecycle entries.
 
 ## What is *not* yet decided (questions for the user)
 

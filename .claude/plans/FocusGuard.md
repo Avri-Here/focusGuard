@@ -224,7 +224,7 @@ Key NuGet packages:
 
 1. [x] Scaffold solution + 5 projects + tests. *(done 2026-05-20 — see `CLAUDE.md`)*
 2. [x] `FocusGuard.Core` — state machine, password hasher, DPAPI store, IPC contracts. Full unit tests. *(done 2026-05-20 — 49 tests green)*
-3. [ ] `FocusGuard.Service` skeleton — Windows Service that just logs and runs IPC server. Manual install/start works.
+3. [x] `FocusGuard.Service` skeleton — Windows Service that just logs and runs IPC server. Manual install/start works. *(done 2026-05-20 — Worker hosts BudgetClock tick + StateMachine + PipeServer; NoOpFirewallManager placeholder; sc.exe install commands documented in CLAUDE.md)*
 4. [ ] Firewall manager — block-all + service-allow + dynamic allow rules. Verified manually with `Test-NetConnection`.
 5. [ ] DNS sinkhole + adapter override. Whitelist round-trip works end-to-end.
 6. [ ] State machine wired into firewall + DNS. Service holds posture across restarts.
