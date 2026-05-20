@@ -4,10 +4,15 @@ This repo implements the FocusGuard plan at `.claude/plans/FocusGuard.md`. Read 
 
 ## Status (as of 2026-05-20)
 
-- Steps **1–9** of the plan's "Build sequence" are complete.
-- Steps **10–12** are open. Resume with step 10 (manual tamper tests).
-- All tests pass: `dotnet test FocusGuard.slnx` → 59 Core + 66 Service (= 125 total). Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules; everything else is pure unit tests with no elevation requirement.
+- Steps **1–12** of the plan's "Build sequence" are complete. **Code-complete v1.**
+- The remaining work before shipping is the **manual VM verification** itself (the runbook is at `VERIFICATION.md`) and any follow-up hardening uncovered there.
+- Open TODOs intentionally deferred:
+  - **Uninstall password guard** (step 11): structural hooks landed in `Product.wxs` but the managed-CA prompt is not wired. Documented inline + in VERIFICATION.md.
+  - **Live-fire DNS smoke test**: the sinkhole has no end-to-end test that actually binds UDP/53 (unit tests drive the policy core only). Spot-checked manually — see plan step 5.
+  - **Code signing**: skipped per the plan's "Confirmed decisions". MSI is unsigned.
+- All tests pass: `dotnet test FocusGuard.slnx` → 59 Core + 70 Service (= **129 total**). Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules; SessionLauncher smoke tests skip on non-Windows; everything else is pure unit tests.
 - Solution builds cleanly with `dotnet build FocusGuard.slnx`.
+- MSI builds cleanly with `dotnet build src/FocusGuard.Installer/FocusGuard.Installer.wixproj -c Release`.
 
 ## Environment
 
@@ -30,12 +35,13 @@ focusGuard/
 │   ├── FocusGuard.Service/      # ✅ Worker + PipeServer + FirewallManager + DnsSinkhole + AdapterDnsManager + admin commands (steps 3–6)
 │   ├── FocusGuard.Tray/         # ✅ App + tray icon + Status poll + Countdown + AdminWindow + SetPassword wizard (steps 7-8)
 │   └── FocusGuard.Watchdog/     # ✅ Heartbeat-pings Service + respawns Tray (step 9)
-└── tests/
-    ├── FocusGuard.Core.Tests/   # ✅ 59 tests, all green
-    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke + DnsSinkhole + AdapterDnsManager + AdminCommands + PipeClientLocation + SessionLauncher + WorkerWatchdog tests (66 total)
+├── tests/
+│   ├── FocusGuard.Core.Tests/   # ✅ 59 tests, all green
+│   └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke + DnsSinkhole + AdapterDnsManager + AdminCommands + PipeClientLocation + SessionLauncher + WorkerWatchdog + Tamper tests (70 total)
+└── src/FocusGuard.Installer/    # ✅ WiX 5 SDK wixproj + Product.wxs (step 11)
 ```
 
-There is **no** `FocusGuard.Installer` project yet. WiX MSI is step 11.
+`VERIFICATION.md` at the repo root holds the manual VM checklist (step 12).
 
 ## What Core has
 
@@ -78,7 +84,7 @@ Don't smuggle business logic into the Service; keep it as a thin wrapper.
 
 4. **`TreatWarningsAsErrors=true`** is set in `Directory.Build.props` for src projects. Tests opt out via per-project override. Keep src warning-free.
 
-5. **The Tray and Watchdog projects are empty WPF/console templates.** Steps 7–9 will rewrite them.
+5. ~~**The Tray and Watchdog projects are empty WPF/console templates.** Steps 7–9 will rewrite them.~~ *(no longer true — Tray and Watchdog are fully implemented; see gotchas 12–18 below.)*
 
 6. **DNS sinkhole** (`DnsSinkhole.cs`) is split into a pure policy core (`HandleQueryAsync`, `SweepExpired`, `SetPosture`) and a Windows-only socket binder (`Start`/`Stop`) that hands ARSoft `QueryReceivedEventArgs` through `HandleQueryAsync`. Unit tests drive only the policy core — they never bind UDP/53. Whitelist matching is **suffix-based** (`example.com` matches `example.com` and `*.example.com`, but NOT `notexample.com`). Open posture forwards everything upstream and skips `UpsertAllowIp`. Closed posture NXDOMAINs anything not whitelisted. The Worker calls `SweepExpired` once per tick.
 
@@ -106,6 +112,14 @@ Don't smuggle business logic into the Service; keep it as a thin wrapper.
 
 18. **Watchdog is a per-user/per-session console.** Single-instance via `Local\FocusGuard.Watchdog` mutex (the `Local\` prefix scopes the mutex to the session, which matches what the Service does — one watchdog per active console session). It pings `focusguard.cmd` over the named pipe every 5s with `GetStatus`, and respawns `FocusGuard.Tray.exe` from `AppContext.BaseDirectory` if no tray process is found by name. It does not kill itself if the pipe ping fails — the Service can survive transient stalls and we don't want the watchdog to flap.
 
+19. **Audit emissions live in two places.** `Worker.HandleXxx` methods write `AdminAction` and `AuthFailure` lines per command. `Worker.ApplyInput` writes one `StateTransition` line per state change. `Worker.TickOnceAsync` writes one `Tamper` line per `BudgetTickEvent.ClockTamperDetected`, regardless of the current state (so the audit trail is preserved even if no session was active to end). All four `AuditCategory` values are now actually emitted.
+
+20. **WiX 5 installer at `src/FocusGuard.Installer/`.** SDK is `WixToolset.Sdk/5.0.2` + `WixToolset.Util.wixext/5.0.2`. The wixproj sets `<TreatWarningsAsErrors>false</TreatWarningsAsErrors>` and clears `<Nullable>` etc. so the Directory.Build.props .NET-isms don't bleed into WiX. Build with `dotnet build src/FocusGuard.Installer/FocusGuard.Installer.wixproj -c Release` to produce `bin/Release/FocusGuard.msi`. The .wxs source-paths reference `$(var.FocusGuard.Service.TargetDir)FocusGuard.Service.exe` etc. — the wixproj's ProjectReferences populate these at build time. Companion files (deps.json, runtimeconfig.json, transitive .dlls) are NOT yet harvested — the .wxs only declares the three primary exes. For a real shippable MSI you need `heat dir` or `<HarvestDirectory>` to pull the publish output. Documented inline.
+
+21. **Service-stop ACL** is set at install time via `sc.exe sdset FocusGuard "<sddl>"` in a deferred custom action in `Product.wxs`. The chosen SDDL keeps SYSTEM as full-control, lets Authenticated Users query/enumerate (so the service shows up in services.msc), lets Administrators start (RP) but **not** stop (no WP, no SERVICE_STOP). To stop the service, the password-gated `Disable` IPC command is the only path — that flows through Worker which transitions to Disabled and (intentionally) does NOT actually stop the SCM-side service.
+
+22. **VERIFICATION.md** at the repo root is the manual VM checklist for step 12 — the human gate before shipping. Everything that can't be exercised by xUnit (real Windows Firewall, real DNS, real services.msc, real clock changes, MSI install/uninstall) lives there. Update it whenever a behavior change moves the goalposts.
+
 ## Useful commands
 
 ```powershell
@@ -124,11 +138,13 @@ dotnet restore FocusGuard.slnx
 
 ## Recommended order for the next session
 
-The plan's build sequence is good as-is. Next agent should:
+All 12 build-sequence steps are code-complete. The next agent's job is to **execute** `VERIFICATION.md` on a clean Windows 11 VM and file follow-ups for anything that fails. The most likely follow-ups (in priority order):
 
-1. Open `.claude/plans/FocusGuard.md` and tick what's done (already ticked there).
-2. Resume at **step 10**: tamper tests on a real machine — verify Service stop ACL, watchdog respawn, clock-tamper detection, and that killing the Tray triggers a respawn within ~5s.
-3. Continue through steps 11–12.
+1. **Implement the uninstall password guard** — currently a TODO in `src/FocusGuard.Installer/Product.wxs`. The hook point is `<Custom Action="VerifyUninstallPassword" Before="InstallValidate" Condition="REMOVE=&quot;ALL&quot; ..."/>`. Build it as a tiny .NET console exe under `src/FocusGuard.Installer/UninstallGuard/` that reads `C:\ProgramData\FocusGuard\config.dat` (DPAPI LocalMachine), shows `MessageBox.Show` for the password, calls `PasswordHasher.Verify`, and exits 0/1603.
+2. **Harvest companion files in the MSI** — `Product.wxs` only declares the three primary exes. To produce a shippable MSI for a machine without the .NET 10 runtime, either `--self-contained true` the publishes or use `heat dir` to harvest `*.deps.json`, `*.runtimeconfig.json`, and the transitive DLLs. Easier path: switch the publishes to `-p:PublishSingleFile=true` and have the .wxs install one exe per project.
+3. **Wire `SystemEvents.PowerModeChanged`** — gotcha 15 still applies. Sleep/resume currently does not deduct the missed time correctly.
+4. **Live-fire DNS smoke test** — bind UDP/53 in a test process, query whitelisted vs. non-whitelisted. Currently only the policy core is unit-tested.
+5. **Code-sign the MSI** if distributing beyond personal use.
 
 ### Manual install / start (after a Release build)
 
