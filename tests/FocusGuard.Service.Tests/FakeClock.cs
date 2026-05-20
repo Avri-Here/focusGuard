@@ -26,4 +26,8 @@ internal sealed class FakeClock : IClock
         _local += ts;
         _monoMs += (long)ts.TotalMilliseconds;
     }
+
+    /// <summary>Move only the wall clock; monotonic stays put. Use to simulate a system-clock
+    /// change (the tamper trigger is the divergence between the two).</summary>
+    public void AdvanceWallOnly(TimeSpan ts) => _local += ts;
 }

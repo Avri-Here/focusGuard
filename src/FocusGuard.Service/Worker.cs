@@ -146,8 +146,12 @@ public sealed class Worker(
             var result = _budgetClock.Tick(_stateMachine.Current, _stateMachine.PauseEndAt);
             var transitioned = false;
 
-            if (result.Has(BudgetTickEvent.ClockTamperDetected) && _stateMachine.Current == FocusState.Browsing)
-                transitioned |= ApplyInput(new StateInput.ClockTamperDetected(), persistImmediately: false);
+            if (result.Has(BudgetTickEvent.ClockTamperDetected))
+            {
+                audit.Append(AuditCategory.Tamper, "Clock backward jump > tamper threshold");
+                if (_stateMachine.Current == FocusState.Browsing)
+                    transitioned |= ApplyInput(new StateInput.ClockTamperDetected(), persistImmediately: false);
+            }
 
             if (result.Has(BudgetTickEvent.DailyRollover))
             {
@@ -262,6 +266,7 @@ public sealed class Worker(
                 _sessionStartedAt = null;
 
             logger.LogInformation("Transition {From} -> {To} ({Reason})", transition.From, transition.To, transition.Reason);
+            audit.Append(AuditCategory.StateTransition, $"{transition.From} -> {transition.To} ({transition.Reason})");
 
             if (persistImmediately) Persist();
             return true;
