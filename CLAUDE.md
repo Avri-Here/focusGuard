@@ -4,9 +4,9 @@ This repo implements the FocusGuard plan at `.claude/plans/FocusGuard.md`. Read 
 
 ## Status (as of 2026-05-20)
 
-- Steps **1–5** of the plan's "Build sequence" are complete.
-- Steps **6–12** are open. Resume with step 6 (state machine + persistence interactions; right now the Worker already drives posture/firewall/DNS but step 6 is about hardening that across service restarts and clock-tamper, plus the IPC commands beyond Start/Stop budget).
-- All tests pass: `dotnet test FocusGuard.slnx` → 49 Core + 33 Service. Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules; the new DNS / adapter tests are pure unit tests with no elevation requirement.
+- Steps **1–6** of the plan's "Build sequence" are complete.
+- Steps **7–12** are open. Resume with step 7 (`FocusGuard.Tray` — tray icon, status polling, Start/Stop, countdown overlay).
+- All tests pass: `dotnet test FocusGuard.slnx` → 59 Core + 53 Service (= 112 total). Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules; everything else is pure unit tests with no elevation requirement.
 - Solution builds cleanly with `dotnet build FocusGuard.slnx`.
 
 ## Environment
@@ -27,12 +27,12 @@ focusGuard/
 ├── CLAUDE.md                    # this file
 ├── src/
 │   ├── FocusGuard.Core/         # ✅ implemented (see "What Core has")
-│   ├── FocusGuard.Service/      # ✅ Worker + PipeServer + FirewallManager + DnsSinkhole + AdapterDnsManager (steps 3–5)
+│   ├── FocusGuard.Service/      # ✅ Worker + PipeServer + FirewallManager + DnsSinkhole + AdapterDnsManager + admin commands (steps 3–6)
 │   ├── FocusGuard.Tray/         # ⬜ skeleton only — empty WPF
 │   └── FocusGuard.Watchdog/     # ⬜ skeleton only — empty console
 └── tests/
-    ├── FocusGuard.Core.Tests/   # ✅ 49 tests, all green
-    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke + DnsSinkhole + AdapterDnsManager tests (33 total)
+    ├── FocusGuard.Core.Tests/   # ✅ 59 tests, all green
+    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke + DnsSinkhole + AdapterDnsManager + AdminCommands tests (53 total)
 ```
 
 There is **no** `FocusGuard.Installer` project yet. WiX MSI is step 11.
@@ -48,6 +48,9 @@ There is **no** `FocusGuard.Installer` project yet. WiX MSI is step 11.
 | `StateMachine.cs` | Pure state machine. Inputs are `StateInput` records (StartBudget, StopBudget, BudgetExhausted, AdminPause, AdminEndPause, AdminDisable, AdminEnable, DailyRollover, ClockTamperDetected, PauseExpired). Returns `StateTransition`. Throws `IllegalTransitionException` for disallowed inputs. `PostureFor(state)` maps to `NetworkPosture.Closed/Open`. |
 | `IClock.cs` | `IClock` (UtcNow + LocalNow + MonotonicMillis). `SystemClock` real impl. |
 | `BudgetClock.cs` | 1Hz tick logic. Drives 7am-local rollover (multi-day catch-up safe), pause expiry, budget consumption, and clock-tamper detection (>5 min backward jump vs. monotonic). Returns `BudgetTickResult` with `BudgetTickEvent` flags. **Stateless w.r.t. side effects** — caller wires events into the state machine. |
+| `Audit/IAuditLog.cs` | `IAuditLog` + `AuditCategory` enum (`AdminAction`, `StateTransition`, `AuthFailure`, `Tamper`). One line per call. |
+| `Audit/FileAuditLog.cs` | Daily-rolling plaintext log: `audit-YYYY-MM-DD.log` under the service data directory. Format: `<ISO local timestamp>\t<category>\t<message>`. 30-day retention; prunes opportunistically when the date changes. Lock-protected for cross-thread appends. |
+| `Security/AuthLockout.cs` | Sliding brute-force defense. Defaults: 5 consecutive failures → 30s lockout. `IsLockedOut()` clears the counter once the cooldown elapses; `RecordSuccess()` clears it immediately. Uses `IClock` for testability. |
 
 Tests use `FakeClock` (`tests/FocusGuard.Core.Tests/FakeClock.cs`) that lets you advance wall and monotonic independently.
 
@@ -83,6 +86,12 @@ Don't smuggle business logic into the Service; keep it as a thin wrapper.
 
 8. **Upstream DNS** is configurable via `ServiceOptions.UpstreamDns` (default `["1.1.1.1", "1.0.0.1"]`). To override at install time, set `FocusGuard:UpstreamDns:0` etc. via env-var, appsettings, or `sc config` arguments — `Host.CreateApplicationBuilder` binds the section automatically.
 
+9. **Admin commands and lockout state are in-memory.** `AuthLockout` is a Worker field — it resets to zero failures on service restart. That's deliberate (a power-cycle is far more inconvenient than waiting 30s and the lockout is just a bot-defense, not real auth) but worth knowing. The audit log persists across restarts; the lockout counter does not.
+
+10. **`Worker.HandleSetPassword` accepts an empty old password iff no password is configured yet** (first-time setup). Once set, rotation requires the current password. `Disable` mirrors `StartBudget`'s gate and **refuses if no password is configured** — this prevents an unprovisioned install from being trivially disabled.
+
+11. **Whitelist input is normalized** by `Worker.TryNormalizeDomain`: lowercase, single trailing dot stripped. Anything containing `/`, whitespace, or `://`, or anything without a `.`, is rejected. The whitelist stored in `FocusGuardConfig.Whitelist` is always lowercase and dot-free; `DnsSinkhole`'s suffix matcher relies on this.
+
 ## Useful commands
 
 ```powershell
@@ -104,8 +113,8 @@ dotnet restore FocusGuard.slnx
 The plan's build sequence is good as-is. Next agent should:
 
 1. Open `.claude/plans/FocusGuard.md` and tick what's done (already ticked there).
-2. Resume at **step 6**: harden state-machine + persistence interactions across service restart, clock-tamper, and the remaining IPC commands (`SetPassword`, `AddWhitelist`, `RemoveWhitelist`, `AdminPause`, `AdminEndPause`, `Disable`, `Enable`). The DNS sinkhole + adapter manager already react to posture changes; what's missing is the *admin* command surface that drives those transitions.
-3. Continue through steps 7–12.
+2. Resume at **step 7**: build `FocusGuard.Tray` — tray icon, status polling via `IpcCommands.GetStatus`, Start/Stop buttons, countdown overlay. The IPC client side (`PipeClient`) is already in `FocusGuard.Service.Ipc`; the tray app should use a light wrapper around it that connects, sends a request, reads a response, and disconnects per call.
+3. Continue through steps 8–12.
 
 ### Manual install / start (after a Release build)
 
@@ -125,7 +134,7 @@ $p.Connect(2000)
 # (use FocusGuard.Service.Ipc.PipeClient from a tiny test exe for full round-trip)
 ```
 
-The service's data directory is `C:\ProgramData\FocusGuard\` — the host creates it on first launch. EventLog source `FocusGuard` receives lifecycle entries.
+The service's data directory is `C:\ProgramData\FocusGuard\` — the host creates it on first launch. EventLog source `FocusGuard` receives lifecycle entries. Plaintext audit log lives there too (`audit-YYYY-MM-DD.log`, 30-day retention).
 
 ## What is *not* yet decided (questions for the user)
 

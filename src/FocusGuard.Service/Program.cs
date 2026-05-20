@@ -1,6 +1,7 @@
 using System.Net;
 using System.Runtime.Versioning;
 using FocusGuard.Core;
+using FocusGuard.Core.Audit;
 using FocusGuard.Core.Security;
 using FocusGuard.Service;
 using FocusGuard.Service.Network;
@@ -44,6 +45,12 @@ builder.Services.AddSingleton<IDnsSinkhole>(sp =>
 });
 builder.Services.AddSingleton(StoreFactory.CreateConfigStore);
 builder.Services.AddSingleton(StoreFactory.CreateStateStore);
+builder.Services.AddSingleton<IAuditLog>(sp =>
+{
+    var opts = sp.GetRequiredService<IOptions<ServiceOptions>>().Value;
+    Directory.CreateDirectory(opts.DataDirectory);
+    return new FileAuditLog(opts.DataDirectory, sp.GetRequiredService<IClock>());
+});
 
 builder.Services.AddHostedService<Worker>();
 

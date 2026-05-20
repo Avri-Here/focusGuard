@@ -183,15 +183,4 @@ public class WorkerTests
         Assert.Contains("unknown command", response.Error);
     }
 
-    [Fact]
-    public async Task Password_gated_commands_are_not_yet_implemented()
-    {
-        var harness = WorkerHarness.Build();
-        await harness.StartAsync();
-
-        var response = await harness.Worker.HandleAsync(new IpcRequestEnvelope(IpcCommands.AdminPause, default), CancellationToken.None);
-
-        Assert.False(response.Success);
-        Assert.Contains("not implemented", response.Error);
-    }
 }

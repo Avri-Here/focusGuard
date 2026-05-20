@@ -1,4 +1,5 @@
 using FocusGuard.Core;
+using FocusGuard.Core.Audit;
 using FocusGuard.Core.Ipc;
 using FocusGuard.Core.Security;
 using FocusGuard.Service;
@@ -22,10 +23,12 @@ internal sealed class WorkerHarness
     public RecordingAdapterManager Adapters { get; }
     public InMemoryStore<FocusGuardConfig> ConfigStore { get; }
     public InMemoryStore<FocusGuardState> StateStore { get; }
+    public RecordingAuditLog Audit { get; }
+    public PasswordHasher Hasher { get; }
     public ServiceOptions Options { get; }
     public Worker Worker { get; }
 
-    private WorkerHarness(FakeClock clock, RecordingFirewall fw, RecordingSinkhole sh, RecordingAdapterManager ad, InMemoryStore<FocusGuardConfig> cs, InMemoryStore<FocusGuardState> ss, ServiceOptions opts, Worker w)
+    private WorkerHarness(FakeClock clock, RecordingFirewall fw, RecordingSinkhole sh, RecordingAdapterManager ad, InMemoryStore<FocusGuardConfig> cs, InMemoryStore<FocusGuardState> ss, RecordingAuditLog audit, PasswordHasher hasher, ServiceOptions opts, Worker w)
     {
         Clock = clock;
         Firewall = fw;
@@ -33,6 +36,8 @@ internal sealed class WorkerHarness
         Adapters = ad;
         ConfigStore = cs;
         StateStore = ss;
+        Audit = audit;
+        Hasher = hasher;
         Options = opts;
         Worker = w;
     }
@@ -47,6 +52,9 @@ internal sealed class WorkerHarness
         var firewall = new RecordingFirewall();
         var sinkhole = new RecordingSinkhole();
         var adapters = new RecordingAdapterManager();
+        var audit = new RecordingAuditLog();
+        // Use cheap Argon2id parameters to keep tests fast.
+        var hasher = new PasswordHasher(new Argon2idParams(MemoryKb: 8, Iterations: 1, Parallelism: 1, HashLengthBytes: 16, SaltLengthBytes: 8));
         var configStore = new InMemoryStore<FocusGuardConfig>();
         if (seedConfig is not null) configStore.Save(seedConfig);
         var stateStore = new InMemoryStore<FocusGuardState>();
@@ -65,11 +73,13 @@ internal sealed class WorkerHarness
             adapters: adapters,
             configStore: configStore,
             stateStore: stateStore,
+            audit: audit,
+            hasher: hasher,
             options: Microsoft.Extensions.Options.Options.Create(opts),
             loggerFactory: NullLoggerFactory.Instance,
             logger: NullLogger<Worker>.Instance);
 
-        return new WorkerHarness(clock, firewall, sinkhole, adapters, configStore, stateStore, opts, worker);
+        return new WorkerHarness(clock, firewall, sinkhole, adapters, configStore, stateStore, audit, hasher, opts, worker);
     }
 
     public Task StartAsync() => Worker.StartAsync(CancellationToken.None);
@@ -89,3 +99,12 @@ internal sealed class RecordingFirewall : IFirewallManager
     public void UpsertAllowIp(string ip, TimeSpan ttl) => Upserts.Add((ip, ttl));
     public void RemoveAllowIp(string ip) => Removes.Add(ip);
 }
+
+internal sealed class RecordingAuditLog : IAuditLog
+{
+    public List<AuditEntry> Entries { get; } = new();
+
+    public void Append(AuditCategory category, string message) => Entries.Add(new AuditEntry(category, message));
+}
+
+internal sealed record AuditEntry(AuditCategory Category, string Message);

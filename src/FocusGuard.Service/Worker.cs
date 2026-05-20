@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Text.Json;
 using FocusGuard.Core;
+using FocusGuard.Core.Audit;
 using FocusGuard.Core.Ipc;
 using FocusGuard.Core.Security;
 using FocusGuard.Service.Ipc;
@@ -30,12 +31,15 @@ public sealed class Worker(
     IAdapterDnsManager adapters,
     IObjectStore<FocusGuardConfig> configStore,
     IObjectStore<FocusGuardState> stateStore,
+    IAuditLog audit,
+    PasswordHasher hasher,
     IOptions<ServiceOptions> options,
     ILoggerFactory loggerFactory,
     ILogger<Worker> logger) : BackgroundService, ICommandHandler
 {
     private readonly ServiceOptions _options = options.Value;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly AuthLockout _lockout = new(clock);
 
     private FocusGuardConfig _config = new();
     private StateMachine _stateMachine = new();
@@ -230,13 +234,13 @@ public sealed class Worker(
                 IpcCommands.GetStatus => Ok(BuildStatus()),
                 IpcCommands.StartBudget => HandleStartBudget(),
                 IpcCommands.StopBudget => HandleStopBudget(),
-                IpcCommands.SetPassword => NotImplemented(request.Command),
-                IpcCommands.AddWhitelist => NotImplemented(request.Command),
-                IpcCommands.RemoveWhitelist => NotImplemented(request.Command),
-                IpcCommands.AdminPause => NotImplemented(request.Command),
-                IpcCommands.AdminEndPause => NotImplemented(request.Command),
-                IpcCommands.Disable => NotImplemented(request.Command),
-                IpcCommands.Enable => NotImplemented(request.Command),
+                IpcCommands.SetPassword => HandleSetPassword(Parse<SetPasswordRequest>(request.Payload)),
+                IpcCommands.AddWhitelist => HandleAddWhitelist(Parse<AddWhitelistRequest>(request.Payload)),
+                IpcCommands.RemoveWhitelist => HandleRemoveWhitelist(Parse<RemoveWhitelistRequest>(request.Payload)),
+                IpcCommands.AdminPause => HandleAdminPause(Parse<AdminPauseRequest>(request.Payload)),
+                IpcCommands.AdminEndPause => HandleAdminEndPause(Parse<AdminEndPauseRequest>(request.Payload)),
+                IpcCommands.Disable => HandleDisable(Parse<DisableRequest>(request.Payload)),
+                IpcCommands.Enable => HandleEnable(Parse<EnableRequest>(request.Payload)),
                 _ => new IpcResponseEnvelope(false, $"unknown command: {request.Command}", null),
             };
         }
@@ -268,6 +272,175 @@ public sealed class Worker(
         return Ok(BuildStatus());
     }
 
+    // ---- Password-gated commands ----
+
+    private IpcResponseEnvelope HandleSetPassword(SetPasswordRequest req)
+    {
+        if (_lockout.IsLockedOut())
+            return Locked();
+
+        // First-time setup: empty old password is accepted iff no password is configured yet.
+        var firstTime = string.IsNullOrEmpty(_config.PasswordHash);
+        if (!firstTime && !hasher.Verify(req.OldPassword ?? string.Empty, _config.PasswordHash!))
+            return AuthFailed("SetPassword");
+
+        if (string.IsNullOrEmpty(req.NewPassword))
+            return new IpcResponseEnvelope(false, "new password must not be empty", null);
+
+        _config.PasswordHash = hasher.Hash(req.NewPassword);
+        configStore.Save(_config);
+        _lockout.RecordSuccess();
+        audit.Append(AuditCategory.AdminAction, firstTime ? "Password set (first time)" : "Password rotated");
+        return Ok(new OkResponse());
+    }
+
+    private IpcResponseEnvelope HandleAddWhitelist(AddWhitelistRequest req)
+    {
+        if (_lockout.IsLockedOut()) return Locked();
+        if (!VerifyAdmin(req.Password, "AddWhitelist", out var fail)) return fail;
+
+        if (!TryNormalizeDomain(req.Domain, out var normalized))
+            return new IpcResponseEnvelope(false, "invalid domain", null);
+
+        if (!_config.Whitelist.Contains(normalized, StringComparer.Ordinal))
+        {
+            _config.Whitelist.Add(normalized);
+            configStore.Save(_config);
+        }
+        audit.Append(AuditCategory.AdminAction, $"Whitelist add: {normalized}");
+        return Ok(new OkResponse());
+    }
+
+    private IpcResponseEnvelope HandleRemoveWhitelist(RemoveWhitelistRequest req)
+    {
+        if (_lockout.IsLockedOut()) return Locked();
+        if (!VerifyAdmin(req.Password, "RemoveWhitelist", out var fail)) return fail;
+
+        if (!TryNormalizeDomain(req.Domain, out var normalized))
+            return new IpcResponseEnvelope(false, "invalid domain", null);
+
+        if (_config.Whitelist.RemoveAll(d => string.Equals(d, normalized, StringComparison.Ordinal)) > 0)
+            configStore.Save(_config);
+        audit.Append(AuditCategory.AdminAction, $"Whitelist remove: {normalized}");
+        return Ok(new OkResponse());
+    }
+
+    private IpcResponseEnvelope HandleAdminPause(AdminPauseRequest req)
+    {
+        if (_lockout.IsLockedOut()) return Locked();
+        if (!VerifyAdmin(req.Password, "AdminPause", out var fail)) return fail;
+
+        if (_stateMachine.Current != FocusState.Blocked && _stateMachine.Current != FocusState.Browsing)
+            return new IpcResponseEnvelope(false, $"cannot pause from {_stateMachine.Current}", null);
+
+        var minutes = req.DurationMinutes > 0 ? req.DurationMinutes : _config.AdminPauseDefaultMinutes;
+        var until = clock.UtcNow + TimeSpan.FromMinutes(minutes);
+        ApplyInput(new StateInput.AdminPause(until), persistImmediately: true);
+        audit.Append(AuditCategory.AdminAction, $"AdminPause {minutes}min");
+        return Ok(BuildStatus());
+    }
+
+    private IpcResponseEnvelope HandleAdminEndPause(AdminEndPauseRequest req)
+    {
+        if (_lockout.IsLockedOut()) return Locked();
+        if (!VerifyAdmin(req.Password, "AdminEndPause", out var fail)) return fail;
+
+        if (_stateMachine.Current != FocusState.Paused)
+            return new IpcResponseEnvelope(false, "not currently paused", null);
+
+        ApplyInput(new StateInput.AdminEndPause(), persistImmediately: true);
+        audit.Append(AuditCategory.AdminAction, "AdminEndPause");
+        return Ok(BuildStatus());
+    }
+
+    private IpcResponseEnvelope HandleDisable(DisableRequest req)
+    {
+        if (_lockout.IsLockedOut()) return Locked();
+        // Mirror StartBudget: refuse to disable without a configured password — otherwise anyone
+        // could pop the firewall open before setup is complete.
+        if (string.IsNullOrEmpty(_config.PasswordHash))
+            return new IpcResponseEnvelope(false, "admin password must be set before disabling", null);
+        if (!VerifyAdmin(req.Password, "Disable", out var fail)) return fail;
+
+        if (_stateMachine.Current == FocusState.Disabled)
+            return Ok(BuildStatus());
+
+        ApplyInput(new StateInput.AdminDisable(), persistImmediately: true);
+        audit.Append(AuditCategory.AdminAction, "Disable");
+        return Ok(BuildStatus());
+    }
+
+    private IpcResponseEnvelope HandleEnable(EnableRequest req)
+    {
+        if (_lockout.IsLockedOut()) return Locked();
+        if (!VerifyAdmin(req.Password, "Enable", out var fail)) return fail;
+
+        if (_stateMachine.Current != FocusState.Disabled)
+            return new IpcResponseEnvelope(false, "not currently disabled", null);
+
+        ApplyInput(new StateInput.AdminEnable(), persistImmediately: true);
+        audit.Append(AuditCategory.AdminAction, "Enable");
+        return Ok(BuildStatus());
+    }
+
+    private bool VerifyAdmin(string? password, string command, out IpcResponseEnvelope failure)
+    {
+        if (string.IsNullOrEmpty(_config.PasswordHash))
+        {
+            failure = new IpcResponseEnvelope(false, "admin password must be set first", null);
+            return false;
+        }
+        if (!hasher.Verify(password ?? string.Empty, _config.PasswordHash))
+        {
+            failure = AuthFailed(command);
+            return false;
+        }
+        _lockout.RecordSuccess();
+        failure = default!;
+        return true;
+    }
+
+    private IpcResponseEnvelope AuthFailed(string command)
+    {
+        _lockout.RecordFailure();
+        audit.Append(AuditCategory.AuthFailure, $"{command}: wrong password");
+        return new IpcResponseEnvelope(false, "incorrect password", null);
+    }
+
+    private IpcResponseEnvelope Locked()
+    {
+        var seconds = (int)Math.Ceiling(_lockout.TimeRemaining().TotalSeconds);
+        return new IpcResponseEnvelope(false, $"locked out, try again in {seconds}s", null);
+    }
+
+    /// <summary>
+    /// Domain validation: lowercase + strip a single trailing dot. Reject anything that looks
+    /// like a URL or otherwise can't be a bare hostname (slash, scheme, whitespace, no dot).
+    /// </summary>
+    internal static bool TryNormalizeDomain(string? raw, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var trimmed = raw.Trim();
+        if (trimmed.Contains('/') || trimmed.Contains(' ') || trimmed.Contains('\t')) return false;
+        if (trimmed.Contains("://", StringComparison.Ordinal)) return false;
+        if (!trimmed.Contains('.')) return false;
+
+        var lowered = trimmed.ToLowerInvariant();
+        if (lowered.EndsWith('.')) lowered = lowered[..^1];
+        if (lowered.Length == 0 || !lowered.Contains('.')) return false;
+        normalized = lowered;
+        return true;
+    }
+
+    private static T Parse<T>(JsonElement payload)
+    {
+        if (payload.ValueKind == JsonValueKind.Undefined || payload.ValueKind == JsonValueKind.Null)
+            return Activator.CreateInstance<T>()!;
+        return JsonSerializer.Deserialize<T>(payload.GetRawText(), IpcJson.Options)
+               ?? Activator.CreateInstance<T>()!;
+    }
+
     private StatusResponse BuildStatus()
     {
         var sessionSeconds = _sessionStartedAt is { } start
@@ -289,9 +462,6 @@ public sealed class Worker(
         var element = JsonSerializer.SerializeToElement(result, IpcJson.Options);
         return new IpcResponseEnvelope(true, null, element);
     }
-
-    private static IpcResponseEnvelope NotImplemented(string command) =>
-        new(false, $"{command} not implemented in service skeleton", null);
 
     /// <summary>Test seam: drive a single tick deterministically.</summary>
     public Task TickForTestsAsync(CancellationToken ct = default) => TickOnceAsync(ct);
