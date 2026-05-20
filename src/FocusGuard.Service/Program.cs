@@ -20,7 +20,7 @@ builder.Logging.AddEventLog(o =>
 
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddSingleton<PasswordHasher>();
-builder.Services.AddSingleton<IFirewallManager, NoOpFirewallManager>();
+builder.Services.AddSingleton<IFirewallManager, FirewallManager>();
 builder.Services.AddSingleton(StoreFactory.CreateConfigStore);
 builder.Services.AddSingleton(StoreFactory.CreateStateStore);
 

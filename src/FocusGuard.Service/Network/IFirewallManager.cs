@@ -4,8 +4,8 @@ namespace FocusGuard.Service.Network;
 
 /// <summary>
 /// Abstraction over the Windows Firewall rules that drive the network posture.
-/// Real implementation lands in build step 4 (FirewallManager.cs); for the step-3 skeleton
-/// the service uses <see cref="NoOpFirewallManager"/>.
+/// Production implementation: <see cref="FirewallManager"/>.
+/// Tests substitute a recording fake.
 /// </summary>
 public interface IFirewallManager
 {

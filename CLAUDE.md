@@ -4,9 +4,9 @@ This repo implements the FocusGuard plan at `.claude/plans/FocusGuard.md`. Read 
 
 ## Status (as of 2026-05-20)
 
-- Steps **1–3** of the plan's "Build sequence" are complete.
-- Steps **4–12** are open. Resume with step 4 (real `FirewallManager`).
-- Core unit tests + Service tests all pass (`dotnet test tests/FocusGuard.Core.Tests/...` and `tests/FocusGuard.Service.Tests/...`).
+- Steps **1–4** of the plan's "Build sequence" are complete.
+- Steps **5–12** are open. Resume with step 5 (DNS sinkhole + adapter override).
+- All tests pass: `dotnet test FocusGuard.slnx` → 49 Core + 16 Service, 0 skipped when run elevated on Windows. Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules.
 - Solution builds cleanly with `dotnet build FocusGuard.slnx`.
 
 ## Environment
@@ -27,12 +27,12 @@ focusGuard/
 ├── CLAUDE.md                    # this file
 ├── src/
 │   ├── FocusGuard.Core/         # ✅ implemented (see "What Core has")
-│   ├── FocusGuard.Service/      # ✅ skeleton: Worker + PipeServer + NoOpFirewall (step 3)
+│   ├── FocusGuard.Service/      # ✅ Worker + PipeServer + real FirewallManager (steps 3–4)
 │   ├── FocusGuard.Tray/         # ⬜ skeleton only — empty WPF
 │   └── FocusGuard.Watchdog/     # ⬜ skeleton only — empty console
 └── tests/
     ├── FocusGuard.Core.Tests/   # ✅ 49 tests, all green
-    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer round-trip tests
+    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke tests
 ```
 
 There is **no** `FocusGuard.Installer` project yet. WiX MSI is step 11.
@@ -67,11 +67,7 @@ Don't smuggle business logic into the Service; keep it as a thin wrapper.
 
 ## Known caveats / gotchas for the next agent
 
-1. **Firewall COM interop is intentionally not wired up.** The Service `.csproj` originally had `<COMReference Include="NetFwTypeLib">` but it fails under `dotnet build` ("ResolveComReference is not supported on the .NET Core version of MSBuild"). Step 4 must use one of:
-   - The `WindowsFirewallHelper` NuGet package (preferred — easiest)
-   - Late-bound interop via `Type.GetTypeFromProgID("HNetCfg.FwPolicy2")` and `dynamic`
-   - Building the Service from Visual Studio (not `dotnet build`)
-   The csproj has a comment marker where the reference should go.
+1. **Firewall is via `WindowsFirewallHelper` NuGet** (`FirewallWAS.Instance` under the hood). The original COM-reference approach fails under `dotnet build` — don't try to revive it. `FirewallManager.EnsureStaticRules` is idempotent; calling it twice never duplicates rules. Anything created or refreshed via this manager is named with the `FG-` prefix and grouped as `FocusGuard`. `ApplyPosture` only toggles `FG-BlockAll`'s `IsEnable` — the open posture leaves the other allow rules in place but moot.
 
 2. **DPAPI is `LocalMachine` scope** — fine for the SYSTEM service, but if you ever want to run the Service as a regular user account you'll need to revisit. Tests guard with `Skip.IfNot(IsOSPlatform(Windows))`.
 
@@ -102,8 +98,8 @@ dotnet restore FocusGuard.slnx
 The plan's build sequence is good as-is. Next agent should:
 
 1. Open `.claude/plans/FocusGuard.md` and tick what's done (already ticked there).
-2. Resume at **step 4**: implement `FirewallManager.cs` against the Windows Firewall (use `WindowsFirewallHelper` NuGet — see caveat #1) and replace the `NoOpFirewallManager` registration in `Program.cs`.
-3. Continue through steps 5–12.
+2. Resume at **step 5**: build `DnsSinkhole.cs` (local DNS resolver on `127.0.0.1:53` using `ARSoft.Tools.Net`) and `AdapterDnsManager.cs` (push `127.0.0.1` onto every active adapter, save originals for restore on Disable). Wire whitelist resolution into `FirewallManager.UpsertAllowIp` / `RemoveAllowIp` with TTL bookkeeping.
+3. Continue through steps 6–12.
 
 ### Manual install / start (after a Release build)
 
@@ -127,6 +123,5 @@ The service's data directory is `C:\ProgramData\FocusGuard\` — the host create
 
 ## What is *not* yet decided (questions for the user)
 
-- Whether to use `WindowsFirewallHelper` NuGet vs. late-bound COM for the firewall (recommend NuGet; ask before adding the dependency).
 - Whether the WiX installer (step 11) should be built with `WixToolset.Sdk` (modern, .NET-style csproj) or the legacy WiX 3 toolset.
 - Code-signing remains out of scope per the plan's "Confirmed decisions" section.
