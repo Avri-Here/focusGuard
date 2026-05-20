@@ -4,6 +4,7 @@
     <Project Path="src/FocusGuard.Service/FocusGuard.Service.csproj" />
     <Project Path="src/FocusGuard.Tray/FocusGuard.Tray.csproj" />
     <Project Path="src/FocusGuard.Watchdog/FocusGuard.Watchdog.csproj" />
+    <Project Path="src/FocusGuard.Installer/FocusGuard.Installer.wixproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FocusGuard.Core.Tests/FocusGuard.Core.Tests.csproj" />

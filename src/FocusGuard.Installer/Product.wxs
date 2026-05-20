@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FocusGuard — WiX 5 installer authoring (step 11 of plan).
+
+  Layout:
+    INSTALLDIR = [ProgramFiles64Folder]\FocusGuard
+      FocusGuard.Service.exe   (Windows service, LocalSystem, auto-start)
+      FocusGuard.Tray.exe      (per-user, launched from HKLM Run + by service)
+      FocusGuard.Watchdog.exe  (per-user, launched from HKLM Run + by service)
+
+    %ProgramData%\FocusGuard   (created with locked-down ACL: SYSTEM full,
+                                Administrators read, Users denied)
+
+  After ServiceInstall the deferred custom actions run sc.exe to:
+    - configure failure auto-restart (5s delay, 3 attempts, no reset)
+    - sdset the service security descriptor so even Administrators cannot
+      issue SERVICE_STOP from services.msc.
+
+  The "uninstall guard" requested in the plan (password prompt before
+  uninstall) is NOT implemented in code yet — see the TODO further down
+  for the exact hook point. The structural placeholder is left as a
+  comment so the next agent can drop in a managed custom action without
+  re-architecting the .wxs.
+
+  Payload sourcing.
+  Each project's publish output is referenced via the file paths below.
+  The wixproj's ProjectReferences ensure the apps are built before the
+  installer; for the MSI to actually be packaged with content, the user
+  should publish each app first:
+
+      dotnet publish src/FocusGuard.Service/FocusGuard.Service.csproj  -c Release -o ..\publish\Service
+      dotnet publish src/FocusGuard.Tray/FocusGuard.Tray.csproj        -c Release -o ..\publish\Tray
+      dotnet publish src/FocusGuard.Watchdog/FocusGuard.Watchdog.csproj -c Release -o ..\publish\Watchdog
+      dotnet build   src/FocusGuard.Installer/FocusGuard.Installer.wixproj -c Release
+
+  This .wxs only declares the three primary executables explicitly; framework
+  dependencies (System.*, Microsoft.*, runtimeconfig.json, deps.json, .pdb)
+  should be harvested with `heat dir` or equivalent in a follow-up. For a
+  framework-dependent install where the user already has the .NET 10 runtime,
+  the three exes plus their immediate companion files are enough to verify
+  the structural authoring is correct.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="FocusGuard"
+           Manufacturer="FocusGuard"
+           Version="0.1.0.0"
+           UpgradeCode="37235C01-6109-4228-B20B-8E5B49F5C9D1"
+           Scope="perMachine"
+           InstallerVersion="500"
+           Compressed="yes">
+
+    <SummaryInformation Description="FocusGuard installer" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- ===================================================================
+         Directory tree
+         =================================================================== -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="FocusGuard" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DATADIR" Name="FocusGuard" />
+    </StandardDirectory>
+
+    <!-- ===================================================================
+         Components
+         =================================================================== -->
+    <ComponentGroup Id="FocusGuardComponents" Directory="INSTALLDIR">
+
+      <!--
+        FocusGuard.Service.exe — installed with a ServiceInstall element so
+        the SCM creates the service at install time and ServiceControl
+        starts it (and stops/removes on uninstall).
+      -->
+      <Component Id="ServiceExe" Guid="*">
+        <File Id="FocusGuardService.exe"
+              Source="$(var.FocusGuard.Service.TargetDir)FocusGuard.Service.exe"
+              KeyPath="yes" />
+
+        <ServiceInstall Id="ServiceInstall"
+                        Name="FocusGuard"
+                        DisplayName="FocusGuard"
+                        Description="FocusGuard internet self-block service"
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Vital="yes" />
+
+        <ServiceControl Id="ServiceControl"
+                        Name="FocusGuard"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+
+      <!-- Tray app + Run-key auto-launch entry. -->
+      <Component Id="TrayExe" Guid="*">
+        <File Id="FocusGuardTray.exe"
+              Source="$(var.FocusGuard.Tray.TargetDir)FocusGuard.Tray.exe"
+              KeyPath="yes" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                       Name="FocusGuard.Tray"
+                       Type="string"
+                       Value="&quot;[INSTALLDIR]FocusGuard.Tray.exe&quot;" />
+      </Component>
+
+      <!-- Watchdog + Run-key auto-launch entry. -->
+      <Component Id="WatchdogExe" Guid="*">
+        <File Id="FocusGuardWatchdog.exe"
+              Source="$(var.FocusGuard.Watchdog.TargetDir)FocusGuard.Watchdog.exe"
+              KeyPath="yes" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                       Name="FocusGuard.Watchdog"
+                       Type="string"
+                       Value="&quot;[INSTALLDIR]FocusGuard.Watchdog.exe&quot;" />
+      </Component>
+
+    </ComponentGroup>
+
+    <!--
+      Pre-create %ProgramData%\FocusGuard with locked-down ACL.
+
+      The Util extension's PermissionEx applies a fresh DACL (no inheritance)
+      that grants only the principals listed. We DO NOT add a "Users:Deny"
+      ACE — omitting Users from the allow list is sufficient because we
+      replace the inherited DACL entirely. Adding an explicit deny ACE
+      would override even SYSTEM access in some configurations.
+
+      The service auto-creates this directory at first run if missing, so
+      the installer simply pre-creates it with the right ACL to harden
+      against a non-elevated user reading config.dat between install and
+      first service start.
+    -->
+    <ComponentGroup Id="FocusGuardDataDir" Directory="DATADIR">
+      <Component Id="DataDirComponent" Guid="*">
+        <CreateFolder>
+          <util:PermissionEx User="SYSTEM" GenericAll="yes" />
+          <util:PermissionEx User="Administrators"
+                             GenericRead="yes"
+                             GenericExecute="yes"
+                             ReadAttributes="yes"
+                             ReadPermission="yes" />
+        </CreateFolder>
+        <RegistryValue Root="HKLM"
+                       Key="Software\FocusGuard\Install"
+                       Name="DataDir"
+                       Type="string"
+                       Value="[DATADIR]"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ===================================================================
+         Custom actions: post-install service hardening
+         =================================================================== -->
+
+    <!--
+      sc.exe failure FocusGuard reset= 0 actions= restart/5000/restart/5000/restart/5000
+
+      Belt-and-suspenders for the in-app watchdog: if the service crashes,
+      the SCM will restart it three times with 5s delays between attempts.
+    -->
+    <CustomAction Id="ConfigureServiceFailure"
+                  Directory="INSTALLDIR"
+                  ExeCommand='sc.exe failure FocusGuard reset= 0 actions= restart/5000/restart/5000/restart/5000'
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <!--
+      sc.exe sdset FocusGuard "<sddl>"
+
+      Removes SERVICE_STOP from BUILTIN\Administrators so even an admin
+      cannot stop the service from services.msc. SYSTEM keeps full
+      control; Authenticated Users keep query/enumerate so the service
+      shows up normally in services.msc.
+
+      SDDL breakdown:
+        D: (DACL)
+          (A;;CCLCSWLOCRRC;;;AU)        — Authenticated Users:
+                                            CC=SERVICE_QUERY_CONFIG,
+                                            LC=SERVICE_QUERY_STATUS,
+                                            SW=SERVICE_ENUMERATE_DEPENDENTS,
+                                            LO=SERVICE_INTERROGATE,
+                                            CR=SERVICE_USER_DEFINED_CONTROL,
+                                            RC=READ_CONTROL.
+                                          NO SERVICE_STOP, NO SERVICE_START.
+          (A;;CCLCSWRPLORC;;;BA)        — Built-in Administrators:
+                                            adds RP=SERVICE_START,
+                                            still NO SERVICE_STOP, NO WP=SERVICE_PAUSE_CONTINUE.
+          (A;;CCLCSWRPWPDTLOCRRC;;;SY)  — SYSTEM: full control
+                                            (RP=start, WP=stop/pause, DT=delete-child).
+        S: (SACL)
+          (AU;FA;...;;;WD)              — Audit failures, Everyone, all access mask.
+    -->
+    <CustomAction Id="LockServiceSDDL"
+                  Directory="INSTALLDIR"
+                  ExeCommand='sc.exe sdset FocusGuard "D:(A;;CCLCSWLOCRRC;;;AU)(A;;CCLCSWRPLORC;;;BA)(A;;CCLCSWRPWPDTLOCRRC;;;SY)S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)"'
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!--
+        Run after StartServices so the service exists and is running by the
+        time we tweak its failure config and DACL. Both are non-fatal
+        (Return="ignore") because the service is already functional even
+        if these post-tweaks fail; we just lose the hardening.
+      -->
+      <Custom Action="ConfigureServiceFailure" After="StartServices" Condition="NOT REMOVE" />
+      <Custom Action="LockServiceSDDL"        After="ConfigureServiceFailure" Condition="NOT REMOVE" />
+
+      <!--
+        TODO(step 11): uninstall password guard.
+
+        Drop a managed custom action DLL (or a tiny console exe invoked
+        via a Type 18 deferred CA) here, scheduled BEFORE
+        InstallValidate so it can abort the uninstall by returning
+        non-zero. Pseudocode:
+
+          <Custom Action="VerifyUninstallPassword"
+                  Before="InstallValidate"
+                  Condition="REMOVE=&quot;ALL&quot; AND UPGRADINGPRODUCTCODE=&quot;&quot;" />
+
+        Implementation hooks:
+          - read C:\ProgramData\FocusGuard\config.dat (DPAPI LocalMachine)
+          - reuse FocusGuard.Core.Security.PasswordHasher.Verify
+          - present a MessageBox prompt; if no hash configured, allow
+            uninstall freely (first-launch wizard never finished).
+
+        Skipping for now — see VERIFICATION.md for the manual workaround
+        (uninstall under SYSTEM via PsExec, or run Disable first to gate
+        on the same password).
+      -->
+    </InstallExecuteSequence>
+
+    <!-- ===================================================================
+         Features
+         =================================================================== -->
+    <Feature Id="Main" Title="FocusGuard" Level="1" Display="expand" AllowAdvertise="no">
+      <ComponentGroupRef Id="FocusGuardComponents" />
+      <ComponentGroupRef Id="FocusGuardDataDir" />
+    </Feature>
+
+  </Package>
+</Wix>

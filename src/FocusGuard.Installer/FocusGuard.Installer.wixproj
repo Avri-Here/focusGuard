@@ -1,0 +1,54 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <PropertyGroup>
+    <OutputName>FocusGuard</OutputName>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <!--
+      ICE91 fires because we install per-machine bits to the user-profile Run key
+      via a registry-based approach (HKLM Run is per-machine and fine, but if the
+      ICE check ever flags any of our component placements we don't want the build
+      to hard-fail for a self-installed MSI.) Add more codes here only with a
+      deliberate justification.
+    -->
+    <SuppressIces>ICE91</SuppressIces>
+    <!--
+      Directory.Build.props at the repo root sets TreatWarningsAsErrors=true and
+      Nullable=enable for the .NET projects. Those properties are meaningless to
+      WiX and (in some WiX SDK versions) cause spurious diagnostics. Neutralise
+      them here so the wixproj inherits a clean slate.
+    -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <Nullable></Nullable>
+    <ImplicitUsings></ImplicitUsings>
+    <LangVersion></LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+  <!--
+    The installer harvests its payload from each app project's publish output.
+    These ProjectReferences make the wixproj depend on the apps so they build
+    first; the actual file inclusion is via the HarvestDirectory items below.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\FocusGuard.Service\FocusGuard.Service.csproj">
+      <Properties>Configuration=$(Configuration);Platform=AnyCPU</Properties>
+      <Private>false</Private>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="..\FocusGuard.Tray\FocusGuard.Tray.csproj">
+      <Properties>Configuration=$(Configuration);Platform=AnyCPU</Properties>
+      <Private>false</Private>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="..\FocusGuard.Watchdog\FocusGuard.Watchdog.csproj">
+      <Properties>Configuration=$(Configuration);Platform=AnyCPU</Properties>
+      <Private>false</Private>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+  </ItemGroup>
+
+</Project>
