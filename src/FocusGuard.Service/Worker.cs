@@ -26,6 +26,8 @@ namespace FocusGuard.Service;
 public sealed class Worker(
     IClock clock,
     IFirewallManager firewall,
+    IDnsSinkhole sinkhole,
+    IAdapterDnsManager adapters,
     IObjectStore<FocusGuardConfig> configStore,
     IObjectStore<FocusGuardState> stateStore,
     IOptions<ServiceOptions> options,
@@ -71,7 +73,38 @@ public sealed class Worker(
         firewall.EnsureStaticRules();
         firewall.ApplyPosture(_stateMachine.CurrentPosture);
 
+        // Push 127.0.0.1 onto every adapter so the sinkhole intercepts every query — but only
+        // when we're not in Disabled, where the user expects the machine to be unmodified.
+        if (_stateMachine.Current != FocusState.Disabled)
+        {
+            var captured = adapters.OverrideToLoopback();
+            MergeSavedAdapterDns(captured);
+        }
+        sinkhole.SetPosture(_stateMachine.CurrentPosture);
+        sinkhole.Start();
+
         await base.StartAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        try { sinkhole.Stop(); } catch { /* best effort */ }
+        await base.StopAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private void MergeSavedAdapterDns(IReadOnlyDictionary<string, IReadOnlyList<string>> captured)
+    {
+        var changed = false;
+        foreach (var (id, original) in captured)
+        {
+            if (!_config.SavedAdapterDns.TryGetValue(id, out var existing)
+                || !existing.SequenceEqual(original))
+            {
+                _config.SavedAdapterDns[id] = original.ToList();
+                changed = true;
+            }
+        }
+        if (changed) configStore.Save(_config);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -118,6 +151,8 @@ public sealed class Worker(
             if (result.Has(BudgetTickEvent.BudgetExhausted) && _stateMachine.Current == FocusState.Browsing)
                 transitioned |= ApplyInput(new StateInput.BudgetExhausted(), persistImmediately: false);
 
+            sinkhole.SweepExpired();
+
             var now = clock.UtcNow;
             if (transitioned || now - _lastPersistAt >= _options.StatePersistInterval)
             {
@@ -139,6 +174,20 @@ public sealed class Worker(
         if (previous != transition.To)
         {
             firewall.ApplyPosture(transition.Posture);
+            sinkhole.SetPosture(transition.Posture);
+
+            // Disable returns the user's adapter DNS to its originals; re-enable repushes loopback.
+            if (transition.To == FocusState.Disabled && previous != FocusState.Disabled)
+            {
+                RestoreAdaptersFromConfig();
+                sinkhole.Stop();
+            }
+            else if (previous == FocusState.Disabled && transition.To != FocusState.Disabled)
+            {
+                var captured = adapters.OverrideToLoopback();
+                MergeSavedAdapterDns(captured);
+                sinkhole.Start();
+            }
 
             if (transition.To == FocusState.Browsing)
                 _sessionStartedAt = clock.UtcNow;
@@ -152,6 +201,14 @@ public sealed class Worker(
         }
 
         return false;
+    }
+
+    private void RestoreAdaptersFromConfig()
+    {
+        if (_config.SavedAdapterDns.Count == 0) return;
+        var snapshot = _config.SavedAdapterDns
+            .ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value.ToArray());
+        adapters.Restore(snapshot);
     }
 
     private void Persist()

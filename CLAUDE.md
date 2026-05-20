@@ -4,9 +4,9 @@ This repo implements the FocusGuard plan at `.claude/plans/FocusGuard.md`. Read 
 
 ## Status (as of 2026-05-20)
 
-- Steps **1–4** of the plan's "Build sequence" are complete.
-- Steps **5–12** are open. Resume with step 5 (DNS sinkhole + adapter override).
-- All tests pass: `dotnet test FocusGuard.slnx` → 49 Core + 16 Service, 0 skipped when run elevated on Windows. Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules.
+- Steps **1–5** of the plan's "Build sequence" are complete.
+- Steps **6–12** are open. Resume with step 6 (state machine + persistence interactions; right now the Worker already drives posture/firewall/DNS but step 6 is about hardening that across service restarts and clock-tamper, plus the IPC commands beyond Start/Stop budget).
+- All tests pass: `dotnet test FocusGuard.slnx` → 49 Core + 33 Service. Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules; the new DNS / adapter tests are pure unit tests with no elevation requirement.
 - Solution builds cleanly with `dotnet build FocusGuard.slnx`.
 
 ## Environment
@@ -27,12 +27,12 @@ focusGuard/
 ├── CLAUDE.md                    # this file
 ├── src/
 │   ├── FocusGuard.Core/         # ✅ implemented (see "What Core has")
-│   ├── FocusGuard.Service/      # ✅ Worker + PipeServer + real FirewallManager (steps 3–4)
+│   ├── FocusGuard.Service/      # ✅ Worker + PipeServer + FirewallManager + DnsSinkhole + AdapterDnsManager (steps 3–5)
 │   ├── FocusGuard.Tray/         # ⬜ skeleton only — empty WPF
 │   └── FocusGuard.Watchdog/     # ⬜ skeleton only — empty console
 └── tests/
     ├── FocusGuard.Core.Tests/   # ✅ 49 tests, all green
-    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke tests
+    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke + DnsSinkhole + AdapterDnsManager tests (33 total)
 ```
 
 There is **no** `FocusGuard.Installer` project yet. WiX MSI is step 11.
@@ -77,6 +77,12 @@ Don't smuggle business logic into the Service; keep it as a thin wrapper.
 
 5. **The Tray and Watchdog projects are empty WPF/console templates.** Steps 7–9 will rewrite them.
 
+6. **DNS sinkhole** (`DnsSinkhole.cs`) is split into a pure policy core (`HandleQueryAsync`, `SweepExpired`, `SetPosture`) and a Windows-only socket binder (`Start`/`Stop`) that hands ARSoft `QueryReceivedEventArgs` through `HandleQueryAsync`. Unit tests drive only the policy core — they never bind UDP/53. Whitelist matching is **suffix-based** (`example.com` matches `example.com` and `*.example.com`, but NOT `notexample.com`). Open posture forwards everything upstream and skips `UpsertAllowIp`. Closed posture NXDOMAINs anything not whitelisted. The Worker calls `SweepExpired` once per tick.
+
+7. **AdapterDnsManager** captures originals **lazily** the first time `OverrideToLoopback` is called (or when a new adapter appears later). The originals are written into `FocusGuardConfig.SavedAdapterDns` so they survive a service restart. On admin Disable the Worker restores them and stops the sinkhole; on re-Enable it re-pushes loopback and restarts the sinkhole. The production WMI backend (`WmiNetworkAdapterBackend`) is exercised only by manual VM verification — unit tests use `INetworkAdapterBackend` with an in-memory fake.
+
+8. **Upstream DNS** is configurable via `ServiceOptions.UpstreamDns` (default `["1.1.1.1", "1.0.0.1"]`). To override at install time, set `FocusGuard:UpstreamDns:0` etc. via env-var, appsettings, or `sc config` arguments — `Host.CreateApplicationBuilder` binds the section automatically.
+
 ## Useful commands
 
 ```powershell
@@ -98,8 +104,8 @@ dotnet restore FocusGuard.slnx
 The plan's build sequence is good as-is. Next agent should:
 
 1. Open `.claude/plans/FocusGuard.md` and tick what's done (already ticked there).
-2. Resume at **step 5**: build `DnsSinkhole.cs` (local DNS resolver on `127.0.0.1:53` using `ARSoft.Tools.Net`) and `AdapterDnsManager.cs` (push `127.0.0.1` onto every active adapter, save originals for restore on Disable). Wire whitelist resolution into `FirewallManager.UpsertAllowIp` / `RemoveAllowIp` with TTL bookkeeping.
-3. Continue through steps 6–12.
+2. Resume at **step 6**: harden state-machine + persistence interactions across service restart, clock-tamper, and the remaining IPC commands (`SetPassword`, `AddWhitelist`, `RemoveWhitelist`, `AdminPause`, `AdminEndPause`, `Disable`, `Enable`). The DNS sinkhole + adapter manager already react to posture changes; what's missing is the *admin* command surface that drives those transitions.
+3. Continue through steps 7–12.
 
 ### Manual install / start (after a Release build)
 

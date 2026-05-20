@@ -18,15 +18,19 @@ internal sealed class WorkerHarness
 {
     public FakeClock Clock { get; }
     public RecordingFirewall Firewall { get; }
+    public RecordingSinkhole Sinkhole { get; }
+    public RecordingAdapterManager Adapters { get; }
     public InMemoryStore<FocusGuardConfig> ConfigStore { get; }
     public InMemoryStore<FocusGuardState> StateStore { get; }
     public ServiceOptions Options { get; }
     public Worker Worker { get; }
 
-    private WorkerHarness(FakeClock clock, RecordingFirewall fw, InMemoryStore<FocusGuardConfig> cs, InMemoryStore<FocusGuardState> ss, ServiceOptions opts, Worker w)
+    private WorkerHarness(FakeClock clock, RecordingFirewall fw, RecordingSinkhole sh, RecordingAdapterManager ad, InMemoryStore<FocusGuardConfig> cs, InMemoryStore<FocusGuardState> ss, ServiceOptions opts, Worker w)
     {
         Clock = clock;
         Firewall = fw;
+        Sinkhole = sh;
+        Adapters = ad;
         ConfigStore = cs;
         StateStore = ss;
         Options = opts;
@@ -41,6 +45,8 @@ internal sealed class WorkerHarness
     {
         var clock = new FakeClock(localNow ?? new DateTimeOffset(2026, 5, 20, 12, 0, 0, TimeSpan.FromHours(3)));
         var firewall = new RecordingFirewall();
+        var sinkhole = new RecordingSinkhole();
+        var adapters = new RecordingAdapterManager();
         var configStore = new InMemoryStore<FocusGuardConfig>();
         if (seedConfig is not null) configStore.Save(seedConfig);
         var stateStore = new InMemoryStore<FocusGuardState>();
@@ -55,13 +61,15 @@ internal sealed class WorkerHarness
         var worker = new Worker(
             clock: clock,
             firewall: firewall,
+            sinkhole: sinkhole,
+            adapters: adapters,
             configStore: configStore,
             stateStore: stateStore,
             options: Microsoft.Extensions.Options.Options.Create(opts),
             loggerFactory: NullLoggerFactory.Instance,
             logger: NullLogger<Worker>.Instance);
 
-        return new WorkerHarness(clock, firewall, configStore, stateStore, opts, worker);
+        return new WorkerHarness(clock, firewall, sinkhole, adapters, configStore, stateStore, opts, worker);
     }
 
     public Task StartAsync() => Worker.StartAsync(CancellationToken.None);
@@ -71,11 +79,13 @@ internal sealed class RecordingFirewall : IFirewallManager
 {
     public List<NetworkPosture> PostureCalls { get; } = new();
     public bool StaticRulesInstalled { get; private set; }
+    public List<(string Ip, TimeSpan Ttl)> Upserts { get; } = new();
+    public List<string> Removes { get; } = new();
 
     public NetworkPosture? LastPosture => PostureCalls.Count == 0 ? null : PostureCalls[^1];
 
     public void EnsureStaticRules() => StaticRulesInstalled = true;
     public void ApplyPosture(NetworkPosture posture) => PostureCalls.Add(posture);
-    public void UpsertAllowIp(string ip, TimeSpan ttl) { }
-    public void RemoveAllowIp(string ip) { }
+    public void UpsertAllowIp(string ip, TimeSpan ttl) => Upserts.Add((ip, ttl));
+    public void RemoveAllowIp(string ip) => Removes.Add(ip);
 }
