@@ -4,9 +4,9 @@ This repo implements the FocusGuard plan at `.claude/plans/FocusGuard.md`. Read 
 
 ## Status (as of 2026-05-20)
 
-- Steps **1–6** of the plan's "Build sequence" are complete.
-- Steps **7–12** are open. Resume with step 7 (`FocusGuard.Tray` — tray icon, status polling, Start/Stop, countdown overlay).
-- All tests pass: `dotnet test FocusGuard.slnx` → 59 Core + 53 Service (= 112 total). Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules; everything else is pure unit tests with no elevation requirement.
+- Steps **1–8** of the plan's "Build sequence" are complete.
+- Steps **9–12** are open. Resume with step 9 (`FocusGuard.Watchdog` + service-side `SessionLauncher`).
+- All tests pass: `dotnet test FocusGuard.slnx` → 59 Core + 58 Service (= 117 total). Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules; everything else is pure unit tests with no elevation requirement.
 - Solution builds cleanly with `dotnet build FocusGuard.slnx`.
 
 ## Environment
@@ -28,11 +28,11 @@ focusGuard/
 ├── src/
 │   ├── FocusGuard.Core/         # ✅ implemented (see "What Core has")
 │   ├── FocusGuard.Service/      # ✅ Worker + PipeServer + FirewallManager + DnsSinkhole + AdapterDnsManager + admin commands (steps 3–6)
-│   ├── FocusGuard.Tray/         # ⬜ skeleton only — empty WPF
+│   ├── FocusGuard.Tray/         # ✅ App + tray icon + Status poll + Countdown + AdminWindow + SetPassword wizard (steps 7-8)
 │   └── FocusGuard.Watchdog/     # ⬜ skeleton only — empty console
 └── tests/
     ├── FocusGuard.Core.Tests/   # ✅ 59 tests, all green
-    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke + DnsSinkhole + AdapterDnsManager + AdminCommands tests (53 total)
+    └── FocusGuard.Service.Tests/ # ✅ Worker + PipeServer + FirewallManager smoke + DnsSinkhole + AdapterDnsManager + AdminCommands + PipeClientLocation tests (58 total)
 ```
 
 There is **no** `FocusGuard.Installer` project yet. WiX MSI is step 11.
@@ -92,6 +92,14 @@ Don't smuggle business logic into the Service; keep it as a thin wrapper.
 
 11. **Whitelist input is normalized** by `Worker.TryNormalizeDomain`: lowercase, single trailing dot stripped. Anything containing `/`, whitespace, or `://`, or anything without a `.`, is rejected. The whitelist stored in `FocusGuardConfig.Whitelist` is always lowercase and dot-free; `DnsSinkhole`'s suffix matcher relies on this.
 
+12. **`PipeClient` and `PipeFraming` live in `FocusGuard.Core.Ipc`.** They were originally in `FocusGuard.Service.Ipc` but moved during step 7 so the Tray could reuse them without referencing the Service assembly. `PipeServer` stays in the Service. There is a regression test in `tests/FocusGuard.Service.Tests/PipeClientLocationTests.cs` that pins them to Core's namespace and assembly; if you "fix" them back you'll break the Tray build.
+
+13. **Tray password-verification probe.** The Tray's `PasswordPromptDialog` sends an `AdminEndPause` request with the entered password and treats both `Success=true` and the specific error string `"not currently paused"` as "password is correct". The error wording is asserted in `AdminCommandsTests.AdminEndPause_with_correct_password_when_not_paused_returns_not_currently_paused`. If you change the wording, update the Tray + that test together.
+
+14. **Tray runtime icon.** `FocusGuard.Tray.IconFactory` renders a coloured circle to a `Bitmap` and round-trips it through a `MemoryStream` so the resulting `Icon` owns its native data and disposing it doesn't yank the native handle out from under H.NotifyIcon. Don't optimise to `Icon.FromHandle` directly — the handle ownership semantics burn you on dispose.
+
+15. **`SystemEvents.PowerModeChanged` for sleep/resume is NOT yet wired up.** The plan calls for it in Step 5/6 of the architecture; it's currently a known gap. Adding it lives in `Worker.cs`, not the Tray.
+
 ## Useful commands
 
 ```powershell
@@ -113,8 +121,8 @@ dotnet restore FocusGuard.slnx
 The plan's build sequence is good as-is. Next agent should:
 
 1. Open `.claude/plans/FocusGuard.md` and tick what's done (already ticked there).
-2. Resume at **step 7**: build `FocusGuard.Tray` — tray icon, status polling via `IpcCommands.GetStatus`, Start/Stop buttons, countdown overlay. The IPC client side (`PipeClient`) is already in `FocusGuard.Service.Ipc`; the tray app should use a light wrapper around it that connects, sends a request, reads a response, and disconnects per call.
-3. Continue through steps 8–12.
+2. Resume at **step 9**: `FocusGuard.Watchdog` (per-user console exe that pings the Service and respawns the Tray) plus the service-side `SessionLauncher` (`CreateProcessAsUser` against the active console session). The Watchdog should reuse `FocusGuard.Core.Ipc.PipeClient` for its heartbeat ping. A previous step-9 attempt left work-in-progress on disk that did not compile; it has been reverted. Start fresh.
+3. Continue through steps 10–12.
 
 ### Manual install / start (after a Release build)
 

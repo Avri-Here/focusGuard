@@ -1,0 +1,68 @@
+<Window x:Class="FocusGuard.Tray.Windows.AdminWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="FocusGuard — admin"
+        Width="540" Height="540"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanMinimize">
+    <DockPanel Margin="12">
+        <Border DockPanel.Dock="Bottom" Background="#11000000" Padding="8" Margin="0,8,0,0" CornerRadius="4">
+            <TextBlock x:Name="StatusFooter" Text="Status: …" Foreground="#80000000"/>
+        </Border>
+
+        <TabControl>
+            <TabItem Header="Pause">
+                <StackPanel Margin="12">
+                    <TextBlock TextWrapping="Wrap" Margin="0,0,0,12"
+                               Text="Open the internet for a fixed duration without consuming today's browsing budget."/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Duration (minutes):" VerticalAlignment="Center" Width="140"/>
+                        <TextBox x:Name="PauseMinutesBox" Text="30" Width="80"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Pause now" Padding="12,4" Margin="0,0,8,0" Click="OnPauseClick"/>
+                        <Button Content="End pause" Padding="12,4" Click="OnEndPauseClick"/>
+                    </StackPanel>
+                </StackPanel>
+            </TabItem>
+
+            <TabItem Header="Whitelist">
+                <DockPanel Margin="12">
+                    <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                        <Button Content="Add" DockPanel.Dock="Right" Padding="12,4" Margin="6,0,0,0" Click="OnAddWhitelistClick"/>
+                        <TextBox x:Name="WhitelistInputBox" />
+                    </DockPanel>
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Remove selected" Padding="12,4" Click="OnRemoveWhitelistClick"/>
+                    </StackPanel>
+
+                    <ListBox x:Name="WhitelistBox"/>
+                </DockPanel>
+            </TabItem>
+
+            <TabItem Header="Disable / Enable">
+                <StackPanel Margin="12">
+                    <TextBlock TextWrapping="Wrap" Margin="0,0,0,12"
+                               Text="Disable returns the machine to its normal networking. Re-enable to resume FocusGuard."/>
+                    <Button x:Name="ToggleDisableButton" Content="Disable FocusGuard" Padding="12,6" Click="OnToggleDisableClick"/>
+                </StackPanel>
+            </TabItem>
+
+            <TabItem Header="Change password">
+                <StackPanel Margin="12">
+                    <TextBlock Text="Old password" Margin="0,0,0,2"/>
+                    <PasswordBox x:Name="OldPwdBox" Margin="0,0,0,8"/>
+                    <TextBlock Text="New password" Margin="0,0,0,2"/>
+                    <PasswordBox x:Name="NewPwdBox" Margin="0,0,0,8"/>
+                    <TextBlock Text="Confirm new password" Margin="0,0,0,2"/>
+                    <PasswordBox x:Name="ConfirmPwdBox" Margin="0,0,0,8"/>
+                    <DockPanel>
+                        <Button Content="Apply" DockPanel.Dock="Right" Padding="12,4" Click="OnChangePasswordClick"/>
+                        <TextBlock x:Name="ChangePwdMessage" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                    </DockPanel>
+                </StackPanel>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>

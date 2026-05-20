@@ -147,6 +147,47 @@ public class AdminCommandsTests
         Assert.Equal(FocusState.Blocked, snapshot.State);
     }
 
+    [Fact]
+    public async Task AdminEndPause_with_correct_password_when_not_paused_returns_not_currently_paused()
+    {
+        // The Tray uses this exact response as a cheap "is the password right?" probe before
+        // opening the admin window. The password is correct and we're in BLOCKED, so the
+        // service should reject the request with the specific "not currently paused" error
+        // (NOT with "incorrect password"). Locking this contract down here prevents anyone
+        // from accidentally renaming the error string and silently breaking the tray.
+        var harness = WorkerHarness.Build();
+        WithPassword(harness, CorrectPwd);
+        await harness.StartAsync();
+
+        var resp = await harness.Worker.HandleAsync(
+            Req(IpcCommands.AdminEndPause, new AdminEndPauseRequest(Password: CorrectPwd)),
+            CancellationToken.None);
+
+        Assert.False(resp.Success);
+        Assert.NotNull(resp.Error);
+        Assert.Contains("not currently paused", resp.Error!, StringComparison.OrdinalIgnoreCase);
+        // No AuthFailure entry, because the password matched.
+        Assert.DoesNotContain(harness.Audit.Entries, e => e.Category == AuditCategory.AuthFailure);
+    }
+
+    [Fact]
+    public async Task AdminEndPause_with_wrong_password_when_not_paused_returns_incorrect_password()
+    {
+        // Mirror of the above: the probe must distinguish between "wrong password" and
+        // the benign "not currently paused" response.
+        var harness = WorkerHarness.Build();
+        WithPassword(harness, CorrectPwd);
+        await harness.StartAsync();
+
+        var resp = await harness.Worker.HandleAsync(
+            Req(IpcCommands.AdminEndPause, new AdminEndPauseRequest(Password: WrongPwd)),
+            CancellationToken.None);
+
+        Assert.False(resp.Success);
+        Assert.NotNull(resp.Error);
+        Assert.Contains("incorrect password", resp.Error!, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---- Whitelist ----
 
     [Fact]

@@ -8,6 +8,9 @@ using Microsoft.Extensions.Logging;
 
 namespace FocusGuard.Service.Ipc;
 
+// PipeFraming and PipeClient now live in FocusGuard.Core.Ipc so the Tray can reuse them
+// without depending on the Service assembly.
+
 /// <summary>
 /// Hosts the named-pipe IPC endpoint. Accepts connections in a loop, framing JSON requests/
 /// responses with a 4-byte big-endian length prefix. Each connection serves multiple

@@ -1,13 +1,13 @@
 using System.IO.Pipes;
 using System.Runtime.Versioning;
 using System.Text.Json;
-using FocusGuard.Core.Ipc;
 
-namespace FocusGuard.Service.Ipc;
+namespace FocusGuard.Core.Ipc;
 
 /// <summary>
-/// Minimal client for the FocusGuard named pipe. Lives in the Service assembly so the Tray
-/// project picks it up via project reference; the framing format is private to this assembly.
+/// Minimal client for the FocusGuard named pipe. Lives in Core so both the Service (for tests)
+/// and the Tray app can share it without depending on each other. The framing format itself
+/// is in <see cref="PipeFraming"/>.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class PipeClient : IAsyncDisposable

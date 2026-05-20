@@ -5,6 +5,8 @@ using FocusGuard.Core.Ipc;
 using FocusGuard.Service.Ipc;
 using Microsoft.Extensions.Logging.Abstractions;
 
+// PipeClient lives in FocusGuard.Core.Ipc; PipeServer remains in FocusGuard.Service.Ipc.
+
 namespace FocusGuard.Service.Tests;
 
 /// <summary>

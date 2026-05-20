@@ -1,15 +1,14 @@
 using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
-using FocusGuard.Core.Ipc;
 
-namespace FocusGuard.Service.Ipc;
+namespace FocusGuard.Core.Ipc;
 
 /// <summary>
 /// Length-prefix framing for IPC: 4-byte big-endian payload length, then UTF-8 JSON.
 /// Shared by server and client so a single representation lives in one place.
 /// </summary>
-internal static class PipeFraming
+public static class PipeFraming
 {
     /// <summary>Hard cap on payload size to bound allocations from a misbehaving peer.</summary>
     public const int MaxPayloadBytes = 1 * 1024 * 1024;
