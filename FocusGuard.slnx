@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FocusGuard.Core/FocusGuard.Core.csproj" />
+    <Project Path="src/FocusGuard.Service/FocusGuard.Service.csproj" />
+    <Project Path="src/FocusGuard.Tray/FocusGuard.Tray.csproj" />
+    <Project Path="src/FocusGuard.Watchdog/FocusGuard.Watchdog.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FocusGuard.Core.Tests/FocusGuard.Core.Tests.csproj" />
+    <Project Path="tests/FocusGuard.Service.Tests/FocusGuard.Service.Tests.csproj" />
+  </Folder>
+</Solution>

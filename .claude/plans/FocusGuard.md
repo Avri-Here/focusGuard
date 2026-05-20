@@ -222,17 +222,24 @@ Key NuGet packages:
 
 ## Build sequence (when implementation starts)
 
-1. Scaffold solution + 5 projects + tests.
-2. `FocusGuard.Core` — state machine, password hasher, DPAPI store, IPC contracts. Full unit tests.
-3. `FocusGuard.Service` skeleton — Windows Service that just logs and runs IPC server. Manual install/start works.
-4. Firewall manager — block-all + service-allow + dynamic allow rules. Verified manually with `Test-NetConnection`.
-5. DNS sinkhole + adapter override. Whitelist round-trip works end-to-end.
-6. State machine wired into firewall + DNS. Service holds posture across restarts.
-7. `FocusGuard.Tray` — tray icon, status polling, Start/Stop, countdown overlay.
-8. Admin window — password gate, whitelist edit, pause, disable.
-9. `FocusGuard.Watchdog` + service-side `SessionLauncher`.
-10. Tamper tests pass.
-11. WiX installer — service install, ACLs, sc-failure config, sc-sdset, uninstall guard.
-12. Manual VM verification per section above.
+1. [x] Scaffold solution + 5 projects + tests. *(done 2026-05-20 — see `CLAUDE.md`)*
+2. [x] `FocusGuard.Core` — state machine, password hasher, DPAPI store, IPC contracts. Full unit tests. *(done 2026-05-20 — 49 tests green)*
+3. [ ] `FocusGuard.Service` skeleton — Windows Service that just logs and runs IPC server. Manual install/start works.
+4. [ ] Firewall manager — block-all + service-allow + dynamic allow rules. Verified manually with `Test-NetConnection`.
+5. [ ] DNS sinkhole + adapter override. Whitelist round-trip works end-to-end.
+6. [ ] State machine wired into firewall + DNS. Service holds posture across restarts.
+7. [ ] `FocusGuard.Tray` — tray icon, status polling, Start/Stop, countdown overlay.
+8. [ ] Admin window — password gate, whitelist edit, pause, disable.
+9. [ ] `FocusGuard.Watchdog` + service-side `SessionLauncher`.
+10. [ ] Tamper tests pass.
+11. [ ] WiX installer — service install, ACLs, sc-failure config, sc-sdset, uninstall guard.
+12. [ ] Manual VM verification per section above.
 
 Estimated effort: ~1 week of focused work to a working v1, plus a few days hardening.
+
+## Deviations from the original plan (recorded after step 1-2 implementation)
+
+- **.NET version**: Plan said .NET 8; we used **.NET 10** (only SDK installed: 10.0.300). Target framework moniker is `net10.0-windows` for every project.
+- **Repo location**: Plan suggested `C:\Intel\workNice\FocusGuard\`; actual code lives in `C:\Users\avrahamy\Documents\avriWorkingHere\focusGuard\` (the repo where this plan was written).
+- **Solution format**: New SDK uses `FocusGuard.slnx` (XML solution), not the legacy `.sln`.
+- **Firewall COM interop**: `<COMReference Include="NetFwTypeLib">` requires Visual Studio MSBuild and fails under `dotnet build`. Removed for now; the Service `.csproj` carries a comment noting this. Step 4 (FirewallManager) must re-introduce it via either a NuGet wrapper (e.g. `WindowsFirewallHelper`) or dynamic `Type.GetTypeFromProgID("HNetCfg.FwPolicy2")` interop.
