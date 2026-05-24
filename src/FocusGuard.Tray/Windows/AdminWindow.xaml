@@ -4,7 +4,8 @@
         Title="FocusGuard — admin"
         Width="540" Height="540"
         WindowStartupLocation="CenterScreen"
-        ResizeMode="CanMinimize">
+        ResizeMode="CanMinimize"
+        Icon="pack://application:,,,/Resources/AppIcon.ico">
     <DockPanel Margin="12">
         <Border DockPanel.Dock="Bottom" Background="#11000000" Padding="8" Margin="0,8,0,0" CornerRadius="4">
             <TextBlock x:Name="StatusFooter" Text="Status: …" Foreground="#80000000"/>

@@ -36,9 +36,10 @@ public partial class App : Application
     private MenuItem? _stopItem;
     private MenuItem? _adminItem;
     private MenuItem? _statusItem;
-    private Icon? _activeIcon;
-    private Icon? _idleIcon;
-    private Icon? _disabledIcon;
+    // Cache icon BYTES, not Icon instances. H.NotifyIcon's Icon setter disposes
+    // the previously-assigned Icon, so a cached instance becomes invalid after
+    // the first state change. See IconFactory for the full rationale.
+    private byte[]? _appIconBytes;
     private FocusState? _lastState;
     private bool _passwordSetupShown;
 
@@ -56,13 +57,11 @@ public partial class App : Application
 
         try
         {
-            _idleIcon = IconFactory.Create(Color.FromArgb(255, 80, 110, 200), Color.White);
-            _activeIcon = IconFactory.Create(Color.FromArgb(255, 80, 180, 100), Color.White);
-            _disabledIcon = IconFactory.Create(Color.FromArgb(255, 150, 150, 150), Color.White);
+            _appIconBytes = IconFactory.LoadAppIconBytes();
         }
         catch (Exception)
         {
-            // If we can't render icons we still continue without one. The tray-icon component
+            // If we can't load the icon we still continue without one. The tray-icon component
             // tolerates a null Icon.
         }
 
@@ -104,10 +103,17 @@ public partial class App : Application
         _trayIcon = new TaskbarIcon
         {
             ToolTipText = "FocusGuard",
-            Icon = _idleIcon,
+            Icon = MakeIcon(_appIconBytes),
             ContextMenu = menu,
         };
         _trayIcon.ForceCreate(enablesEfficiencyMode: false);
+    }
+
+    private static Icon? MakeIcon(byte[]? bytes)
+    {
+        if (bytes is null) return null;
+        try { return IconFactory.FromBytes(bytes); }
+        catch { return null; }
     }
 
     private async Task EnsurePasswordSetupAsync()
@@ -147,7 +153,7 @@ public partial class App : Application
             _trayIcon.ToolTipText = "FocusGuard — service unavailable";
             if (_statusItem is not null) _statusItem.Header = "Status: service unavailable";
             SetMenuEnabled(start: false, stop: false, admin: false);
-            _trayIcon.Icon = _disabledIcon ?? _idleIcon;
+            _trayIcon.Icon = MakeIcon(_appIconBytes);
             _lastState = null;
             return;
         }
@@ -157,7 +163,7 @@ public partial class App : Application
             _trayIcon.ToolTipText = "FocusGuard — set password to begin";
             if (_statusItem is not null) _statusItem.Header = "Status: password not set";
             SetMenuEnabled(start: false, stop: false, admin: false);
-            _trayIcon.Icon = _idleIcon;
+            _trayIcon.Icon = MakeIcon(_appIconBytes);
             // Re-prompt only if we haven't shown it yet this session.
             if (!_passwordSetupShown) _ = EnsurePasswordSetupAsync();
             _lastState = null;
@@ -180,12 +186,9 @@ public partial class App : Application
             stop: status.State == FocusState.Browsing,
             admin: true);
 
-        _trayIcon.Icon = status.State switch
-        {
-            FocusState.Browsing => _activeIcon ?? _idleIcon,
-            FocusState.Disabled => _disabledIcon ?? _idleIcon,
-            _ => _idleIcon,
-        };
+        // Single app icon for all states — state is conveyed via the tooltip text
+        // (e.g. "FocusGuard — Browsing — 41.3 min left").
+        _trayIcon.Icon = MakeIcon(_appIconBytes);
 
         _lastState = status.State;
     }
@@ -246,9 +249,8 @@ public partial class App : Application
         {
             _poller?.Stop();
             _trayIcon?.Dispose();
-            _activeIcon?.Dispose();
-            _idleIcon?.Dispose();
-            _disabledIcon?.Dispose();
+            // Icon instances are owned by H.NotifyIcon (it disposes on assignment),
+            // so we have nothing to free here beyond the tray itself.
         }
         catch { /* best effort */ }
 

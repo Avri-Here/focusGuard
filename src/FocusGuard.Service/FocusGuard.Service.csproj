@@ -4,6 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <OutputType>Exe</OutputType>
     <UserSecretsId>dotnet-FocusGuard.Service-2b4f965a-afb0-4325-b6b2-d33578e7461e</UserSecretsId>
+    <ApplicationIcon>..\..\assets\Speedtest.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
