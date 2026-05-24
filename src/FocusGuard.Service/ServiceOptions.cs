@@ -1,3 +1,5 @@
+using FocusGuard.Core;
+
 namespace FocusGuard.Service;
 
 /// <summary>
@@ -29,6 +31,18 @@ public sealed class ServiceOptions
 
     /// <summary>Filename of the per-user watchdog launched by the service into the active console session.</summary>
     public string WatchdogExeName { get; set; } = "FocusGuard.Watchdog.exe";
+
+    /// <summary>
+    /// Directory containing the installed FocusGuard executables. Defaults to the directory
+    /// of the running service exe via <see cref="InstallLocation.Directory"/> — that's correct
+    /// in production, including under <c>PublishSingleFile</c> where
+    /// <see cref="AppContext.BaseDirectory"/> would point at a per-exe self-extract folder
+    /// instead of the install dir. Tests override this to point at the test bin folder.
+    /// </summary>
+    public string? InstallDirectory { get; set; }
+
+    /// <summary>Resolved install directory: <see cref="InstallDirectory"/> or the live process path's dir.</summary>
+    public string ResolveInstallDirectory() => InstallDirectory ?? InstallLocation.Directory;
 
     /// <summary>
     /// Minimum gap between watchdog launch attempts. Prevents busy-loop relaunching when the

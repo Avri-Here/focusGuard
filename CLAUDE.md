@@ -120,6 +120,10 @@ Don't smuggle business logic into the Service; keep it as a thin wrapper.
 
 22. **VERIFICATION.md** at the repo root is the manual VM checklist for step 12 — the human gate before shipping. Everything that can't be exercised by xUnit (real Windows Firewall, real DNS, real services.msc, real clock changes, MSI install/uninstall) lives there. Update it whenever a behavior change moves the goalposts.
 
+23. **`AppContext.BaseDirectory` lies under `PublishSingleFile`.** The installer publishes each app with `PublishSingleFile=true` + `IncludeAllContentForSelfExtract=true`. At first launch the runtime extracts the bundle to `%TEMP%\.net\<exe-name>\<hash>\` and `AppContext.BaseDirectory` returns **that extract folder**, not `C:\Program Files\FocusGuard\`. Each app gets its own extract folder, so siblings cannot find each other through `BaseDirectory`. Use `FocusGuard.Core.InstallLocation.Directory` (returns `Path.GetDirectoryName(Environment.ProcessPath)`) for any sibling-exe lookup. The Service goes through `ServiceOptions.ResolveInstallDirectory()` so tests can override `InstallDirectory` to point at the test bin folder (in production it falls through to `InstallLocation.Directory`); the Watchdog's `Program.cs` calls `InstallLocation.Directory` directly. **Do not "fix" these back to `AppContext.BaseDirectory`** — it silently breaks the watchdog→tray spawn after install. Symptom in `service-stderr` / Watchdog console: `Tray exe not found at C:\...\AppData\Local\Temp\.net\FocusGuard.Watchdog\<hash>\FocusGuard.Tray.exe`.
+
+24. **The Tray context menu has NO Exit option.** Tamper resistance: a user-visible "Exit" button invites the user to fight the tool. The watchdog respawns the tray within ~5s anyway, so an Exit button just creates a flicker. The supported way to silence FocusGuard is the password-gated `Disable` admin command (`Admin…` → Disable). Don't re-add the menu item.
+
 ## Useful commands
 
 ```powershell

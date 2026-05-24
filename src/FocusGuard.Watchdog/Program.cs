@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using FocusGuard.Core;
 using FocusGuard.Core.Ipc;
 
 namespace FocusGuard.Watchdog;
@@ -100,7 +101,8 @@ internal static class Program
                 foreach (var p in existing) p.Dispose();
             }
 
-            var trayPath = Path.Combine(AppContext.BaseDirectory, TrayExeName);
+            var installDir = InstallLocation.Directory;
+            var trayPath = Path.Combine(installDir, TrayExeName);
             if (!File.Exists(trayPath))
             {
                 Console.WriteLine($"Tray exe not found at {trayPath}");
@@ -110,7 +112,7 @@ internal static class Program
             var psi = new ProcessStartInfo
             {
                 FileName = trayPath,
-                WorkingDirectory = AppContext.BaseDirectory,
+                WorkingDirectory = installDir,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };

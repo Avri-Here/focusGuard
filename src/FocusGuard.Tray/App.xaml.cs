@@ -92,11 +92,11 @@ public partial class App : Application
         _statusItem = new MenuItem { Header = "Status: connecting…", IsEnabled = false };
         menu.Items.Add(_statusItem);
 
-        menu.Items.Add(new Separator());
-
-        var exit = new MenuItem { Header = "Exit" };
-        exit.Click += (_, _) => Shutdown();
-        menu.Items.Add(exit);
+        // Intentionally NO "Exit" item — tamper resistance. The watchdog
+        // would respawn the tray within ~5s anyway, but exposing a quit
+        // affordance invites the user to fight it. Disable from the
+        // Admin window (password-gated) is the supported way to silence
+        // FocusGuard.
 
         _trayIcon = new TaskbarIcon
         {

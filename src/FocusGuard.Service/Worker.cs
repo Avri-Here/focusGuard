@@ -203,7 +203,7 @@ public sealed class Worker(
             return;
         }
 
-        var exePath = Path.Combine(AppContext.BaseDirectory, _options.WatchdogExeName);
+        var exePath = Path.Combine(_options.ResolveInstallDirectory(), _options.WatchdogExeName);
         if (!File.Exists(exePath))
         {
             logger.LogDebug("Watchdog exe not found at {ExePath} — skipping launch", exePath);

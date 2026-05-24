@@ -13,13 +13,16 @@ namespace FocusGuard.Service.Tests;
 public class WorkerWatchdogTests
 {
     /// <summary>
-    /// We need <c>File.Exists(Path.Combine(AppContext.BaseDirectory, WatchdogExeName))</c> to
-    /// be true so Worker actually attempts a launch. Use a file we know lives in the test
-    /// runner's bin folder — that folder IS <see cref="AppContext.BaseDirectory"/>.
+    /// We need <c>File.Exists(Path.Combine(InstallDir, WatchdogExeName))</c> to be true so
+    /// Worker actually attempts a launch. The test bin folder is <see cref="AppContext.BaseDirectory"/>
+    /// — pin <see cref="ServiceOptions.InstallDirectory"/> to it and pick any file living there
+    /// as the "watchdog" filename.
     /// </summary>
+    private static string TestInstallDir() => AppContext.BaseDirectory;
+
     private static string ExistingExeInBaseDir()
     {
-        var here = AppContext.BaseDirectory;
+        var here = TestInstallDir();
         return Path.GetFileName(Directory.EnumerateFiles(here, "*.dll").First())!;
     }
 
@@ -34,6 +37,7 @@ public class WorkerWatchdogTests
     {
         DataDirectory = Path.Combine(Path.GetTempPath(), "FocusGuardTests-" + Guid.NewGuid().ToString("N")),
         PipeName = "focusguard.test." + Guid.NewGuid().ToString("N"),
+        InstallDirectory = TestInstallDir(),
         WatchdogExeName = ExistingExeInBaseDir(),
         WatchdogInterval = watchdogInterval ?? TimeSpan.FromSeconds(10),
     };
