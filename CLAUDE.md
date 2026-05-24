@@ -124,6 +124,8 @@ Don't smuggle business logic into the Service; keep it as a thin wrapper.
 
 24. **The Tray context menu has NO Exit option.** Tamper resistance: a user-visible "Exit" button invites the user to fight the tool. The watchdog respawns the tray within ~5s anyway, so an Exit button just creates a flicker. The supported way to silence FocusGuard is the password-gated `Disable` admin command (`Admin…` → Disable). Don't re-add the menu item.
 
+25. **No floating countdown window — tooltip only.** The Tray previously showed a small "MM:SS" topmost window in the bottom-right while Browsing (`Windows/CountdownWindow.xaml`). It was removed because users described it as nagging. The remaining-time surface is now the tray icon's tooltip text — `ApplyStatus` writes e.g. `"FocusGuard — Browsing — 41.3 min left"` into `_trayIcon.ToolTipText`, which Windows shows automatically on hover. Don't re-introduce the floating window without an explicit ask. The `Windows/CountdownWindow.{xaml,xaml.cs}` files have been deleted.
+
 ## Useful commands
 
 ```powershell

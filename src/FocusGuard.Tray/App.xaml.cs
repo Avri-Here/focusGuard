@@ -16,7 +16,11 @@ namespace FocusGuard.Tray;
 /// - the single-instance mutex (per session)
 /// - the H.NotifyIcon TaskbarIcon and its context menu
 /// - the 2 Hz status poller
-/// - the lifetime of <see cref="CountdownWindow"/> (only while Browsing)
+///
+/// The remaining-time display is the tray icon's tooltip (e.g.
+/// "Browsing — 41.3 min left"); we deliberately do NOT show a floating
+/// countdown window. Past versions did; it was removed because users
+/// described it as nagging. The tooltip is "show on hover" by design.
 /// </summary>
 [SupportedOSPlatform("windows7.0")]
 public partial class App : Application
@@ -28,7 +32,6 @@ public partial class App : Application
     private TaskbarIcon? _trayIcon;
     private DispatcherTimer? _poller;
     private TrayClient _client = new();
-    private CountdownWindow? _countdown;
     private MenuItem? _startItem;
     private MenuItem? _stopItem;
     private MenuItem? _adminItem;
@@ -144,7 +147,6 @@ public partial class App : Application
             _trayIcon.ToolTipText = "FocusGuard — service unavailable";
             if (_statusItem is not null) _statusItem.Header = "Status: service unavailable";
             SetMenuEnabled(start: false, stop: false, admin: false);
-            CloseCountdown();
             _trayIcon.Icon = _disabledIcon ?? _idleIcon;
             _lastState = null;
             return;
@@ -155,7 +157,6 @@ public partial class App : Application
             _trayIcon.ToolTipText = "FocusGuard — set password to begin";
             if (_statusItem is not null) _statusItem.Header = "Status: password not set";
             SetMenuEnabled(start: false, stop: false, admin: false);
-            CloseCountdown();
             _trayIcon.Icon = _idleIcon;
             // Re-prompt only if we haven't shown it yet this session.
             if (!_passwordSetupShown) _ = EnsurePasswordSetupAsync();
@@ -186,11 +187,6 @@ public partial class App : Application
             _ => _idleIcon,
         };
 
-        if (status.State == FocusState.Browsing)
-            EnsureCountdownOpen(status);
-        else
-            CloseCountdown();
-
         _lastState = status.State;
     }
 
@@ -199,26 +195,6 @@ public partial class App : Application
         if (_startItem is not null) _startItem.IsEnabled = start;
         if (_stopItem is not null) _stopItem.IsEnabled = stop;
         if (_adminItem is not null) _adminItem.IsEnabled = admin;
-    }
-
-    private void EnsureCountdownOpen(StatusResponse status)
-    {
-        if (_countdown is null)
-        {
-            _countdown = new CountdownWindow();
-            _countdown.Closed += (_, _) => _countdown = null;
-            _countdown.Show();
-        }
-        _countdown.UpdateFromStatus(status);
-    }
-
-    private void CloseCountdown()
-    {
-        if (_countdown is not null)
-        {
-            try { _countdown.Close(); } catch { /* best effort */ }
-            _countdown = null;
-        }
     }
 
     private async Task OnStartClickAsync()
@@ -269,7 +245,6 @@ public partial class App : Application
         try
         {
             _poller?.Stop();
-            CloseCountdown();
             _trayIcon?.Dispose();
             _activeIcon?.Dispose();
             _idleIcon?.Dispose();
