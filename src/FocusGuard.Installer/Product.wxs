@@ -23,22 +23,19 @@
   re-architecting the .wxs.
 
   Payload sourcing.
-  Each project's publish output is referenced via the file paths below.
-  The wixproj's ProjectReferences ensure the apps are built before the
-  installer; for the MSI to actually be packaged with content, the user
-  should publish each app first:
+  Each app is published as a self-contained single-file exe by the
+  PublishApps target in FocusGuard.Installer.wixproj before this .wxs is
+  compiled. The publish bundles the .NET 10 runtime plus all native and
+  managed dependencies into one ~70 MB exe per app, so the resulting MSI
+  needs no .NET runtime on the target machine.
 
-      dotnet publish src/FocusGuard.Service/FocusGuard.Service.csproj  -c Release -o ..\publish\Service
-      dotnet publish src/FocusGuard.Tray/FocusGuard.Tray.csproj        -c Release -o ..\publish\Tray
-      dotnet publish src/FocusGuard.Watchdog/FocusGuard.Watchdog.csproj -c Release -o ..\publish\Watchdog
-      dotnet build   src/FocusGuard.Installer/FocusGuard.Installer.wixproj -c Release
+  The wixproj exposes three preprocessor variables — ServicePublishDir,
+  TrayPublishDir, WatchdogPublishDir — which point at the per-app publish
+  folders. Each <File Source="..."> below uses one of those variables to
+  pick up the single-file exe.
 
-  This .wxs only declares the three primary executables explicitly; framework
-  dependencies (System.*, Microsoft.*, runtimeconfig.json, deps.json, .pdb)
-  should be harvested with `heat dir` or equivalent in a follow-up. For a
-  framework-dependent install where the user already has the .NET 10 runtime,
-  the three exes plus their immediate companion files are enough to verify
-  the structural authoring is correct.
+  Build:
+      dotnet build src/FocusGuard.Installer/FocusGuard.Installer.wixproj -c Release
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
@@ -80,7 +77,7 @@
       -->
       <Component Id="ServiceExe" Guid="*">
         <File Id="FocusGuardService.exe"
-              Source="$(var.FocusGuard.Service.TargetDir)FocusGuard.Service.exe"
+              Source="$(var.ServicePublishDir)FocusGuard.Service.exe"
               KeyPath="yes" />
 
         <ServiceInstall Id="ServiceInstall"
@@ -104,7 +101,7 @@
       <!-- Tray app + Run-key auto-launch entry. -->
       <Component Id="TrayExe" Guid="*">
         <File Id="FocusGuardTray.exe"
-              Source="$(var.FocusGuard.Tray.TargetDir)FocusGuard.Tray.exe"
+              Source="$(var.TrayPublishDir)FocusGuard.Tray.exe"
               KeyPath="yes" />
         <RegistryValue Root="HKLM"
                        Key="Software\Microsoft\Windows\CurrentVersion\Run"
@@ -116,7 +113,7 @@
       <!-- Watchdog + Run-key auto-launch entry. -->
       <Component Id="WatchdogExe" Guid="*">
         <File Id="FocusGuardWatchdog.exe"
-              Source="$(var.FocusGuard.Watchdog.TargetDir)FocusGuard.Watchdog.exe"
+              Source="$(var.WatchdogPublishDir)FocusGuard.Watchdog.exe"
               KeyPath="yes" />
         <RegistryValue Root="HKLM"
                        Key="Software\Microsoft\Windows\CurrentVersion\Run"

@@ -24,31 +24,64 @@
     <LangVersion></LangVersion>
   </PropertyGroup>
 
+  <!--
+    Self-contained publish settings.
+
+    Each app is published as a single .exe that bundles the .NET 10 runtime
+    plus all managed and native dependencies. The resulting MSI requires no
+    .NET runtime on the target machine — install and run on a clean Windows
+    box (or Windows Sandbox).
+
+    Trade-off: the MSI is ~200 MB. EnableCompressionInSingleFile keeps that
+    as small as it gets without sacrificing portability.
+  -->
+  <PropertyGroup>
+    <PublishRid>win-x64</PublishRid>
+    <PublishRoot>$(MSBuildThisFileDirectory)publish\</PublishRoot>
+    <ServicePublishDir>$(PublishRoot)Service\</ServicePublishDir>
+    <TrayPublishDir>$(PublishRoot)Tray\</TrayPublishDir>
+    <WatchdogPublishDir>$(PublishRoot)Watchdog\</WatchdogPublishDir>
+    <!--
+      WiX preprocessor variables. These are referenced from Product.wxs as
+      $(var.ServicePublishDir) etc.
+    -->
+    <DefineConstants>ServicePublishDir=$(ServicePublishDir);TrayPublishDir=$(TrayPublishDir);WatchdogPublishDir=$(WatchdogPublishDir)</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
   </ItemGroup>
 
   <!--
-    The installer harvests its payload from each app project's publish output.
-    These ProjectReferences make the wixproj depend on the apps so they build
-    first; the actual file inclusion is via the HarvestDirectory items below.
+    Publish each app as a self-contained single-file exe before the WiX
+    candle/light step runs. We deliberately do NOT use ProjectReferences
+    here: ProjectReference would only build (not publish) the apps, and
+    its generated $(var.<Project>.TargetDir) variables would point at the
+    framework-dependent bin output instead of the self-contained publish.
   -->
   <ItemGroup>
-    <ProjectReference Include="..\FocusGuard.Service\FocusGuard.Service.csproj">
-      <Properties>Configuration=$(Configuration);Platform=AnyCPU</Properties>
-      <Private>false</Private>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-    </ProjectReference>
-    <ProjectReference Include="..\FocusGuard.Tray\FocusGuard.Tray.csproj">
-      <Properties>Configuration=$(Configuration);Platform=AnyCPU</Properties>
-      <Private>false</Private>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-    </ProjectReference>
-    <ProjectReference Include="..\FocusGuard.Watchdog\FocusGuard.Watchdog.csproj">
-      <Properties>Configuration=$(Configuration);Platform=AnyCPU</Properties>
-      <Private>false</Private>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-    </ProjectReference>
+    <PublishProject Include="..\FocusGuard.Service\FocusGuard.Service.csproj">
+      <PublishDir>$(ServicePublishDir)</PublishDir>
+    </PublishProject>
+    <PublishProject Include="..\FocusGuard.Tray\FocusGuard.Tray.csproj">
+      <PublishDir>$(TrayPublishDir)</PublishDir>
+    </PublishProject>
+    <PublishProject Include="..\FocusGuard.Watchdog\FocusGuard.Watchdog.csproj">
+      <PublishDir>$(WatchdogPublishDir)</PublishDir>
+    </PublishProject>
   </ItemGroup>
+
+  <Target Name="PublishApps" BeforeTargets="BeforeBuild">
+    <Message Importance="high" Text="FocusGuard.Installer: publishing %(PublishProject.Filename) -&gt; %(PublishProject.PublishDir)" />
+    <Exec Command="dotnet publish &quot;%(PublishProject.FullPath)&quot; -c $(Configuration) -r $(PublishRid) --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o &quot;%(PublishProject.PublishDir)&quot;" />
+  </Target>
+
+  <!--
+    Clean publish output when the wixproj is cleaned, so a rebuild doesn't
+    pick up a stale single-file exe from a previous configuration.
+  -->
+  <Target Name="CleanPublishedApps" AfterTargets="Clean">
+    <RemoveDir Directories="$(PublishRoot)" Condition="Exists('$(PublishRoot)')" />
+  </Target>
 
 </Project>

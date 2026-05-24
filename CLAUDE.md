@@ -2,7 +2,7 @@
 
 This repo implements the FocusGuard plan at `.claude/plans/FocusGuard.md`. Read that plan first; this file only records what's already done and what an agent picking up step 3+ needs to know.
 
-## Status (as of 2026-05-20)
+## Status (as of 2026-05-24)
 
 - Steps **1–12** of the plan's "Build sequence" are complete. **Code-complete v1.**
 - The remaining work before shipping is the **manual VM verification** itself (the runbook is at `VERIFICATION.md`) and any follow-up hardening uncovered there.
@@ -12,7 +12,7 @@ This repo implements the FocusGuard plan at `.claude/plans/FocusGuard.md`. Read 
   - **Code signing**: skipped per the plan's "Confirmed decisions". MSI is unsigned.
 - All tests pass: `dotnet test FocusGuard.slnx` → 59 Core + 70 Service (= **129 total**). Firewall smoke tests skip themselves when not elevated or when a real FocusGuard install already owns the `FG-*` rules; SessionLauncher smoke tests skip on non-Windows; everything else is pure unit tests.
 - Solution builds cleanly with `dotnet build FocusGuard.slnx`.
-- MSI builds cleanly with `dotnet build src/FocusGuard.Installer/FocusGuard.Installer.wixproj -c Release`.
+- MSI builds cleanly with `dotnet build src/FocusGuard.Installer/FocusGuard.Installer.wixproj -c Release`. The MSI is **self-contained** (~134 MB) — bundles .NET 10 runtime per app, so target machines don't need anything pre-installed.
 
 ## Environment
 
@@ -114,7 +114,7 @@ Don't smuggle business logic into the Service; keep it as a thin wrapper.
 
 19. **Audit emissions live in two places.** `Worker.HandleXxx` methods write `AdminAction` and `AuthFailure` lines per command. `Worker.ApplyInput` writes one `StateTransition` line per state change. `Worker.TickOnceAsync` writes one `Tamper` line per `BudgetTickEvent.ClockTamperDetected`, regardless of the current state (so the audit trail is preserved even if no session was active to end). All four `AuditCategory` values are now actually emitted.
 
-20. **WiX 5 installer at `src/FocusGuard.Installer/`.** SDK is `WixToolset.Sdk/5.0.2` + `WixToolset.Util.wixext/5.0.2`. The wixproj sets `<TreatWarningsAsErrors>false</TreatWarningsAsErrors>` and clears `<Nullable>` etc. so the Directory.Build.props .NET-isms don't bleed into WiX. Build with `dotnet build src/FocusGuard.Installer/FocusGuard.Installer.wixproj -c Release` to produce `bin/Release/FocusGuard.msi`. The .wxs source-paths reference `$(var.FocusGuard.Service.TargetDir)FocusGuard.Service.exe` etc. — the wixproj's ProjectReferences populate these at build time. Companion files (deps.json, runtimeconfig.json, transitive .dlls) are NOT yet harvested — the .wxs only declares the three primary exes. For a real shippable MSI you need `heat dir` or `<HarvestDirectory>` to pull the publish output. Documented inline.
+20. **WiX 5 installer at `src/FocusGuard.Installer/`.** SDK is `WixToolset.Sdk/5.0.2` + `WixToolset.Util.wixext/5.0.2`. The wixproj sets `<TreatWarningsAsErrors>false</TreatWarningsAsErrors>` and clears `<Nullable>` etc. so the Directory.Build.props .NET-isms don't bleed into WiX. Build with `dotnet build src/FocusGuard.Installer/FocusGuard.Installer.wixproj -c Release` to produce `bin/Release/FocusGuard.msi` (~134 MB). The wixproj's `PublishApps` target runs `dotnet publish` on each of the three app csprojs with `--self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true` and drops the resulting single-file exes into `src/FocusGuard.Installer/publish/{Service,Tray,Watchdog}/`. The .wxs `<File Source="...">` paths reference WiX preprocessor variables `$(var.ServicePublishDir)` / `$(var.TrayPublishDir)` / `$(var.WatchdogPublishDir)`, set via the wixproj's `DefineConstants`. **No `ProjectReference` from the wixproj** — that would build, not publish, and would point at framework-dependent bin output. The publish folder is gitignored. Each exe is ~36-65 MB and bundles the .NET 10 runtime, so the MSI installs on a clean Windows machine without any prerequisite.
 
 21. **Service-stop ACL** is set at install time via `sc.exe sdset FocusGuard "<sddl>"` in a deferred custom action in `Product.wxs`. The chosen SDDL keeps SYSTEM as full-control, lets Authenticated Users query/enumerate (so the service shows up in services.msc), lets Administrators start (RP) but **not** stop (no WP, no SERVICE_STOP). To stop the service, the password-gated `Disable` IPC command is the only path — that flows through Worker which transitions to Disabled and (intentionally) does NOT actually stop the SCM-side service.
 
@@ -141,10 +141,9 @@ dotnet restore FocusGuard.slnx
 All 12 build-sequence steps are code-complete. The next agent's job is to **execute** `VERIFICATION.md` on a clean Windows 11 VM and file follow-ups for anything that fails. The most likely follow-ups (in priority order):
 
 1. **Implement the uninstall password guard** — currently a TODO in `src/FocusGuard.Installer/Product.wxs`. The hook point is `<Custom Action="VerifyUninstallPassword" Before="InstallValidate" Condition="REMOVE=&quot;ALL&quot; ..."/>`. Build it as a tiny .NET console exe under `src/FocusGuard.Installer/UninstallGuard/` that reads `C:\ProgramData\FocusGuard\config.dat` (DPAPI LocalMachine), shows `MessageBox.Show` for the password, calls `PasswordHasher.Verify`, and exits 0/1603.
-2. **Harvest companion files in the MSI** — `Product.wxs` only declares the three primary exes. To produce a shippable MSI for a machine without the .NET 10 runtime, either `--self-contained true` the publishes or use `heat dir` to harvest `*.deps.json`, `*.runtimeconfig.json`, and the transitive DLLs. Easier path: switch the publishes to `-p:PublishSingleFile=true` and have the .wxs install one exe per project.
-3. **Wire `SystemEvents.PowerModeChanged`** — gotcha 15 still applies. Sleep/resume currently does not deduct the missed time correctly.
-4. **Live-fire DNS smoke test** — bind UDP/53 in a test process, query whitelisted vs. non-whitelisted. Currently only the policy core is unit-tested.
-5. **Code-sign the MSI** if distributing beyond personal use.
+2. **Wire `SystemEvents.PowerModeChanged`** — gotcha 15 still applies. Sleep/resume currently does not deduct the missed time correctly.
+3. **Live-fire DNS smoke test** — bind UDP/53 in a test process, query whitelisted vs. non-whitelisted. Currently only the policy core is unit-tested.
+4. **Code-sign the MSI** if distributing beyond personal use.
 
 ### Manual install / start (after a Release build)
 
