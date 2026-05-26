@@ -45,7 +45,7 @@ public sealed class SessionLauncher(ILogger<SessionLauncher> logger) : ISessionL
     private const int TOKEN_DUPLICATE = 0x0002;
     private const int TOKEN_ALL_ACCESS = 0x000F01FF;
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
-    private const uint CREATE_NEW_CONSOLE = 0x00000010;
+    private const uint CREATE_NO_WINDOW = 0x08000000;
 
     private const int SecurityIdentification = 2;
     private const int TokenPrimary = 1;
@@ -109,7 +109,7 @@ public sealed class SessionLauncher(ILogger<SessionLauncher> logger) : ISessionL
 
             var workingDir = Path.GetDirectoryName(exePath);
 
-            var flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_CONSOLE;
+            var flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
 
             if (!CreateProcessAsUserW(
                     primaryToken,
