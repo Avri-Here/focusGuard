@@ -50,18 +50,7 @@ public sealed class SessionLauncher(ILogger<SessionLauncher> logger) : ISessionL
     private const int SecurityIdentification = 2;
     private const int TokenPrimary = 1;
 
-    public bool HasInteractiveUser()
-    {
-        try
-        {
-            return WTSGetActiveConsoleSessionId() != INVALID_SESSION_ID;
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "WTSGetActiveConsoleSessionId failed");
-            return false;
-        }
-    }
+    public bool HasInteractiveUser() => TryFindInteractiveSession(out _);
 
     public int? Launch(string exePath, string? args = null)
     {
@@ -74,10 +63,9 @@ public sealed class SessionLauncher(ILogger<SessionLauncher> logger) : ISessionL
 
         try
         {
-            var sessionId = WTSGetActiveConsoleSessionId();
-            if (sessionId == INVALID_SESSION_ID)
+            if (!TryFindInteractiveSession(out var sessionId))
             {
-                logger.LogDebug("No active console session — skipping launch of {ExePath}", exePath);
+                logger.LogDebug("No active interactive session — skipping launch of {ExePath}", exePath);
                 return null;
             }
 
@@ -167,6 +155,77 @@ public sealed class SessionLauncher(ILogger<SessionLauncher> logger) : ISessionL
         }
     }
 
+    /// <summary>
+    /// Find a session we can launch a UI process into. Strategy:
+    /// 1. Try <c>WTSGetActiveConsoleSessionId</c> — fast path for the local console user.
+    ///    Skip session 0 (Services session — not interactive) and INVALID_SESSION_ID.
+    /// 2. Fall back to <c>WTSEnumerateSessions</c> and pick the first <c>WTSActive</c> session
+    ///    that has a real user token (so an unattended Windows Hello / login screen does
+    ///    not match). This handles RDP sessions and the brief window after Windows boot
+    ///    when the console session id is not yet set.
+    /// </summary>
+    private bool TryFindInteractiveSession(out uint sessionId)
+    {
+        try
+        {
+            var consoleId = WTSGetActiveConsoleSessionId();
+            if (consoleId != INVALID_SESSION_ID && consoleId != 0 && SessionHasUserToken(consoleId))
+            {
+                sessionId = consoleId;
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "WTSGetActiveConsoleSessionId failed — falling through to enumerate");
+        }
+
+        sessionId = 0;
+        var pSessions = IntPtr.Zero;
+        try
+        {
+            if (!WTSEnumerateSessionsW(IntPtr.Zero, 0, 1, out pSessions, out var count))
+            {
+                var err = Marshal.GetLastWin32Error();
+                logger.LogDebug("WTSEnumerateSessionsW failed with error {Error}", err);
+                return false;
+            }
+
+            var size = Marshal.SizeOf<WTS_SESSION_INFO>();
+            for (var i = 0; i < count; i++)
+            {
+                var ptr = IntPtr.Add(pSessions, i * size);
+                var info = Marshal.PtrToStructure<WTS_SESSION_INFO>(ptr);
+                if (info.State != WTS_CONNECTSTATE_CLASS.WTSActive) continue;
+                if (info.SessionID == 0) continue; // Services session
+                if (!SessionHasUserToken(info.SessionID)) continue;
+                sessionId = info.SessionID;
+                return true;
+            }
+            return false;
+        }
+        finally
+        {
+            if (pSessions != IntPtr.Zero)
+            {
+                try { WTSFreeMemory(pSessions); } catch { /* best-effort */ }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Probe a session by trying to query its user token. Returns true iff a token is
+    /// available — i.e. there's a real user signed in and we can spawn UI as them.
+    /// Caller does NOT receive the token; we close it immediately so the real Launch
+    /// path can re-query without lifetime entanglement.
+    /// </summary>
+    private static bool SessionHasUserToken(uint sessionId)
+    {
+        if (!WTSQueryUserToken(sessionId, out var token)) return false;
+        if (token != IntPtr.Zero) CloseHandle(token);
+        return true;
+    }
+
     // ---- P/Invoke ---- (DllImport, NOT LibraryImport — keeps us out of <AllowUnsafeBlocks>.)
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -175,6 +234,41 @@ public sealed class SessionLauncher(ILogger<SessionLauncher> logger) : ISessionL
     [DllImport("wtsapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool WTSQueryUserToken(uint sessionId, out IntPtr token);
+
+    [DllImport("wtsapi32.dll", SetLastError = true, EntryPoint = "WTSEnumerateSessionsW", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool WTSEnumerateSessionsW(
+        IntPtr hServer,
+        uint reserved,
+        uint version,
+        out IntPtr ppSessionInfo,
+        out uint count);
+
+    [DllImport("wtsapi32.dll")]
+    private static extern void WTSFreeMemory(IntPtr memory);
+
+    private enum WTS_CONNECTSTATE_CLASS
+    {
+        WTSActive,
+        WTSConnected,
+        WTSConnectQuery,
+        WTSShadow,
+        WTSDisconnected,
+        WTSIdle,
+        WTSListen,
+        WTSReset,
+        WTSDown,
+        WTSInit,
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WTS_SESSION_INFO
+    {
+        public uint SessionID;
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string pWinStationName;
+        public WTS_CONNECTSTATE_CLASS State;
+    }
 
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

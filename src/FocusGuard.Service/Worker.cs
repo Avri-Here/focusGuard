@@ -93,6 +93,11 @@ public sealed class Worker(
         sinkhole.SetPosture(_stateMachine.CurrentPosture);
         sinkhole.Start();
 
+        // Spawn the watchdog into the active user session immediately, instead of waiting up
+        // to a full TickInterval. After a fresh MSI install the service starts before the
+        // tick loop begins, so without this the user sees no tray icon until the first tick.
+        SuperviseWatchdog();
+
         await base.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 

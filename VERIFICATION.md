@@ -32,7 +32,7 @@ sign in as a **standard** user (Run-as-admin will be requested for the install).
 
 1. Double-click `FocusGuard.msi` → SmartScreen "unrecognized publisher" dialog → **More info → Run anyway**.
 2. Walk through the installer (default install path: `C:\Program Files\FocusGuard\`; data dir auto-created at `C:\ProgramData\FocusGuard\`). **Expected:** install completes; the FocusGuard service shows up in `services.msc` as **Started, LocalSystem, Automatic**.
-3. Within ~10 seconds the **Set admin password** wizard pops up from the tray. Enter and confirm `MyPassword!1`. **Expected:** wizard closes; FG tray icon shows *Status: BLOCKED, 60 minutes remaining*.
+3. Within ~10 seconds the **Set admin password** wizard pops up from the tray. Enter and confirm `MyPassword!1`. **Expected:** wizard closes; FG tray icon shows *Status: BLOCKED, 60 minutes remaining*. **No reboot or sign-out is required** — the service spawns the watchdog into the active interactive session via `SessionLauncher.Launch`, and the watchdog spawns the tray. (Run-key entries under `HKLM\...\Run` are a belt-and-suspenders second mechanism that fires on the next logon.)
 
 ---
 
